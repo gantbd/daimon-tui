@@ -53,3 +53,26 @@ fn guarded_advance_reuses_the_owner_command_and_attempts_once() {
         assert!(gate.contains(required), "advance gate omits {required}");
     }
 }
+
+#[test]
+fn guarded_prompt_reuses_the_owner_command_and_keeps_content_out_of_argv() {
+    let cli = include_str!("../cli/src/main.rs");
+    assert!(cli.contains("daimon_agent_command::prompt"));
+    assert!(cli.contains("parse_prompt_document"));
+    assert!(cli.contains("agent-prompt"));
+    assert!(!include_str!("../src/lib.rs").contains("AgentSessionClient"));
+
+    let gate = include_str!("live/agent_prompt.sh");
+    for required in [
+        "agent_prompt_fixture",
+        "confirmation_refused",
+        "agents.session.prompt.v1",
+        "PROMPT DAIMON SESSION",
+        "ENVELOPE",
+        "prompt.txt",
+        "prompted",
+    ] {
+        assert!(gate.contains(required), "prompt gate omits {required}");
+    }
+    assert!(!gate.contains("agent-prompt $tmp/success.sock review the boundary"));
+}

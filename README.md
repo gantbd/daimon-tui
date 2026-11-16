@@ -15,6 +15,7 @@ daimon-tui headless /path/to/daimon.sock
 daimon-tui agent-inspect /path/to/daimon-agent.sock AGENT_SESSION_HEX
 daimon-tui agent-interactive /path/to/daimon-agent.sock AGENT_SESSION_HEX
 daimon-tui agent-advance /path/to/daimon-agent.sock AGENT_SESSION_HEX TURN_HEX REVISION IDEMPOTENCY_KEY_HEX NOW 'ADVANCE DAIMON SESSION AGENT_SESSION_HEX TURN TURN_HEX REVISION REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'
+daimon-tui agent-prompt /path/to/daimon-agent.sock request.json prompt.txt 'PROMPT DAIMON SESSION …'
 ```
 
 Headless mode uses `daimon_client::ReadOnlyClient` directly and creates no TUI
@@ -37,3 +38,12 @@ bounded provider slice with a stable idempotency key. It never retries an
 uncertain delivery; the operator must inspect the retained session before any
 further action. `tests/live/agent_advance.sh` proves a confirmation mismatch
 causes no command and a real Unix-service success performs exactly one advance.
+
+The separate `agent-prompt` application command reads a strict credential-free
+execution document and bounded raw prompt file, then delegates to Daimon's
+owner-side guard. The guard observes the exact ready session on the same
+connection and attempts the prompt once. Its confirmation binds both the prompt
+digest and a canonical digest of every execution-envelope field; prompt content
+never enters argv or routine output. A lost reply is outcome-unknown and is
+never redispatched. `tests/live/agent_prompt.sh` proves confirmation refusal
+causes no provider dispatch and a real Unix-service success dispatches once.

@@ -11,6 +11,10 @@
 - Separate exact-confirmed `agents.session.advance.v1` operator command over the
   same public client. It observes current state, attempts once and preserves
   outcome uncertainty; the reusable presentation remains read-only.
+- Separate exact-confirmed `agents.session.prompt.v1` operator command over the
+  same public client. It binds bounded prompt content plus the complete frozen
+  execution envelope by digest, fences the ready revision and never redispatches
+  transport uncertainty.
 - No execution, resume, provider, tool, permission, reattach, or supervisor
   authority in presentation.
 
@@ -22,8 +26,8 @@
    qualified standalone without creating a global session catalogue. Compose
    the same component into Workbench next; legacy/model exact execution status
    remains a separate selected-ID slice.
-4. Bounded active-turn advance now has confirmation, current-state fencing,
-   stable idempotency identity and no-retry evidence. Add prompt dispatch,
+4. Bounded active-turn advance and prompt dispatch now have confirmation,
+   current-state fencing, stable idempotency identity and no-retry evidence. Add
    permission, cancellation or reattach only with their own authority and
    durable uncertainty/reconciliation evidence.
 5. Add native Workbench hosting only after deployment-owned provider and
