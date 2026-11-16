@@ -76,3 +76,25 @@ fn guarded_prompt_reuses_the_owner_command_and_keeps_content_out_of_argv() {
     }
     assert!(!gate.contains("agent-prompt $tmp/success.sock review the boundary"));
 }
+
+#[test]
+fn guarded_permission_binds_the_exact_current_challenge() {
+    let cli = include_str!("../cli/src/main.rs");
+    assert!(cli.contains("daimon_agent_command::decide_permission"));
+    assert!(cli.contains("parse_permission_document"));
+    assert!(cli.contains("agent-permission"));
+    assert!(!include_str!("../src/lib.rs").contains("AgentSessionClient"));
+
+    let gate = include_str!("live/agent_permission.sh");
+    for required in [
+        "agent_permission_fixture",
+        "confirmation_refused",
+        "agents.session.permission.v1",
+        "DECIDE DAIMON PERMISSION",
+        "CHALLENGE",
+        "ENVELOPE",
+        "decided",
+    ] {
+        assert!(gate.contains(required), "permission gate omits {required}");
+    }
+}

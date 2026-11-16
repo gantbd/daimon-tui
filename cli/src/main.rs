@@ -35,6 +35,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if mode == "agent-prompt" {
         return agent_prompt(args);
     }
+    if mode == "agent-permission" {
+        return agent_permission(args);
+    }
     if mode == "agent-inspect" || mode == "agent-interactive" {
         let socket = args.next().map(PathBuf::from).ok_or_else(usage)?;
         let session = args
@@ -461,6 +464,125 @@ fn agent_prompt_failure(
 }
 
 #[cfg(unix)]
+fn agent_permission(
+    mut args: impl Iterator<Item = std::ffi::OsString>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use daimon_agent_command::{PermissionError, parse_permission_document};
+    use daimon_client::unix::AgentClientErrorV1;
+    use daimon_protocol::agent::AgentOutcomeV1;
+    use std::{path::PathBuf, time::Duration};
+
+    let socket = args.next().map(PathBuf::from).ok_or_else(usage)?;
+    let document_path = args.next().map(PathBuf::from).ok_or_else(usage)?;
+    let confirmation = args
+        .next()
+        .and_then(|value| value.into_string().ok())
+        .ok_or_else(usage)?;
+    if args.next().is_some() {
+        return Err(usage().into());
+    }
+    let document = read_bounded(&document_path, 64 * 1024)?;
+    let request = parse_permission_document(&document)
+        .map_err(|error| format!("Daimon permission document refused: {error:?}"))?;
+    let (service_session, port) = match daimon_client::unix::connect_agent(
+        socket,
+        daimon_wire::LimitsV1::default(),
+        daimon_wire::agent::AgentWireLimitsV1::default(),
+        Duration::from_secs(5),
+    ) {
+        Ok(connection) => connection,
+        Err(error) => {
+            return agent_permission_failure("not_sent", &format!("{error:?}"), None, None);
+        }
+    };
+    match daimon_agent_command::decide_permission(service_session, port, request, &confirmation) {
+        Ok(AgentOutcomeV1::Session(view)) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "version": 1,
+                    "peer": "daimon",
+                    "capability": daimon_agent_command::PERMISSION_CAPABILITY,
+                    "complete": true,
+                    "status": "decided",
+                    "revision": view.revision,
+                    "phase": format!("{:?}", view.phase),
+                    "active_turn": view.active_turn.map(|_| "present"),
+                    "last_event_cursor": view.last_event_cursor,
+                }))?
+            );
+            Ok(())
+        }
+        Ok(AgentOutcomeV1::OutcomeUnknown { .. }) => agent_permission_failure(
+            "outcome_unknown",
+            "Daimon retained an indeterminate permission outcome; inspect before any further action",
+            None,
+            None,
+        ),
+        Ok(AgentOutcomeV1::Events(_)) => agent_permission_failure(
+            "invalid_reply",
+            "unexpected Daimon permission reply",
+            None,
+            None,
+        ),
+        Err(PermissionError::ConfirmationMismatch { required }) => agent_permission_failure(
+            "confirmation_refused",
+            "exact Daimon permission confirmation required",
+            Some(&required),
+            None,
+        ),
+        Err(PermissionError::SessionChanged { actual }) => agent_permission_failure(
+            "stale_session",
+            "Daimon session revision, phase, or active turn changed",
+            None,
+            Some(&actual),
+        ),
+        Err(PermissionError::ChallengeChanged) => agent_permission_failure(
+            "stale_challenge",
+            "Daimon permission cursor, request, turn, or option changed",
+            None,
+            None,
+        ),
+        Err(PermissionError::MutationTransport(AgentClientErrorV1::OutcomeUnknown(error))) => {
+            agent_permission_failure("outcome_unknown", &format!("{error:?}"), None, None)
+        }
+        Err(PermissionError::ObservationTransport(AgentClientErrorV1::NotSent(error)))
+        | Err(PermissionError::MutationTransport(AgentClientErrorV1::NotSent(error))) => {
+            agent_permission_failure("not_sent", &format!("{error:?}"), None, None)
+        }
+        Err(PermissionError::ObservationRefused(refusal))
+        | Err(PermissionError::MutationRefused(refusal)) => {
+            agent_permission_failure("refused", &format!("{refusal:?}"), None, None)
+        }
+        Err(error) => agent_permission_failure("unavailable", &format!("{error:?}"), None, None),
+    }
+}
+
+#[cfg(unix)]
+fn agent_permission_failure(
+    status: &str,
+    message: &str,
+    required_confirmation: Option<&str>,
+    actual: Option<&daimon_protocol::agent::AgentSessionViewV1>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "version": 1,
+            "peer": "daimon",
+            "capability": daimon_agent_command::PERMISSION_CAPABILITY,
+            "complete": false,
+            "status": status,
+            "required_confirmation": required_confirmation,
+            "actual_revision": actual.map(|view| view.revision),
+            "actual_phase": actual.map(|view| format!("{:?}", view.phase)),
+            "actual_active_turn": actual.and_then(|view| view.active_turn).map(|_| "present"),
+        }))?
+    );
+    Err(std::io::Error::other(message).into())
+}
+
+#[cfg(unix)]
 fn hex(bytes: &[u8]) -> String {
     let mut value = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -573,7 +695,7 @@ fn headless_failure_for(
 }
 
 fn usage() -> &'static str {
-    "usage: daimon-tui capabilities | daimon-tui <interactive|headless> SOCKET | daimon-tui <agent-inspect|agent-interactive> SOCKET AGENT_SESSION_HEX\ndaimon-tui agent-advance SOCKET AGENT_SESSION_HEX TURN_HEX EXPECTED_REVISION IDEMPOTENCY_KEY_HEX NOW 'ADVANCE DAIMON SESSION AGENT_SESSION_HEX TURN TURN_HEX REVISION EXPECTED_REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'\ndaimon-tui agent-prompt SOCKET REQUEST_JSON PROMPT_FILE 'PROMPT DAIMON SESSION …'\nheadless commands emit bounded versioned observations without constructing TUI state; agent mutations observe exact current state and attempt once without retry"
+    "usage: daimon-tui capabilities | daimon-tui <interactive|headless> SOCKET | daimon-tui <agent-inspect|agent-interactive> SOCKET AGENT_SESSION_HEX\ndaimon-tui agent-advance SOCKET AGENT_SESSION_HEX TURN_HEX EXPECTED_REVISION IDEMPOTENCY_KEY_HEX NOW 'ADVANCE DAIMON SESSION AGENT_SESSION_HEX TURN TURN_HEX REVISION EXPECTED_REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'\ndaimon-tui agent-prompt SOCKET REQUEST_JSON PROMPT_FILE 'PROMPT DAIMON SESSION …'\ndaimon-tui agent-permission SOCKET REQUEST_JSON 'DECIDE DAIMON PERMISSION …'\nheadless commands emit bounded versioned observations without constructing TUI state; agent mutations observe exact current state and attempt once without retry"
 }
 
 #[cfg(not(unix))]

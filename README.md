@@ -16,6 +16,7 @@ daimon-tui agent-inspect /path/to/daimon-agent.sock AGENT_SESSION_HEX
 daimon-tui agent-interactive /path/to/daimon-agent.sock AGENT_SESSION_HEX
 daimon-tui agent-advance /path/to/daimon-agent.sock AGENT_SESSION_HEX TURN_HEX REVISION IDEMPOTENCY_KEY_HEX NOW 'ADVANCE DAIMON SESSION AGENT_SESSION_HEX TURN TURN_HEX REVISION REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'
 daimon-tui agent-prompt /path/to/daimon-agent.sock request.json prompt.txt 'PROMPT DAIMON SESSION …'
+daimon-tui agent-permission /path/to/daimon-agent.sock request.json 'DECIDE DAIMON PERMISSION …'
 ```
 
 Headless mode uses `daimon_client::ReadOnlyClient` directly and creates no TUI
@@ -47,3 +48,10 @@ digest and a canonical digest of every execution-envelope field; prompt content
 never enters argv or routine output. A lost reply is outcome-unknown and is
 never redispatched. `tests/live/agent_prompt.sh` proves confirmation refusal
 causes no provider dispatch and a real Unix-service success dispatches once.
+
+The `agent-permission` command binds one exact cursor-identified provider
+challenge, request, option, current revision, and separately authorized
+execution envelope. Its confirmation includes digests of the complete challenge
+and envelope without echoing provider text. A changed request, turn, option or
+cursor cannot consume the retained challenge, and uncertain delivery is not
+retried. `tests/live/agent_permission.sh` proves the real Unix path.

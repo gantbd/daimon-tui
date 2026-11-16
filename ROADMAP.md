@@ -15,6 +15,9 @@
   same public client. It binds bounded prompt content plus the complete frozen
   execution envelope by digest, fences the ready revision and never redispatches
   transport uncertainty.
+- Separate exact-confirmed `agents.session.permission.v1` command binds one
+  cursor-identified provider challenge and the separately authorized execution
+  envelope before attempting one decision.
 - No execution, resume, provider, tool, permission, reattach, or supervisor
   authority in presentation.
 
@@ -28,7 +31,7 @@
    remains a separate selected-ID slice.
 4. Bounded active-turn advance and prompt dispatch now have confirmation,
    current-state fencing, stable idempotency identity and no-retry evidence. Add
-   permission, cancellation or reattach only with their own authority and
+   cancellation or reattach only with their own authority and
    durable uncertainty/reconciliation evidence.
 5. Add native Workbench hosting only after deployment-owned provider and
    credential composition is explicit.
