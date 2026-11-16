@@ -1,5 +1,9 @@
 # Daimon TUI
 
+Status: locally qualified coordinated source candidate. Public GitHub
+reachability is not claimed until its exact revision and CI run are recorded in
+[`release/github-source.json`](release/github-source.json).
+
 Composable, read-only terminal presentation for Daimon's authenticated public
 clients. The reusable library owns bounded agent-presence projection and exact
 configured agent-session/event observation, local selection, input, and

@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - name: Check out Daimon TUI
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: daimon-tui
+          persist-credentials: false
+      - name: Check out Keystone dependency
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: gantbd/keystone
+          ref: 2e4faf10ec0a70805aa1db1555f93c77fcf0a1e4
+          path: keystone
+          persist-credentials: false
+      - name: Check out Aegis dependency
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: gantbd/aegis
+          ref: b272106cf6d0093839a7d696c829bf8a408b0306
+          path: aegis
+          persist-credentials: false
+      - name: Check out Chronos dependency
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: gantbd/chronos
+          ref: ebff27188388cd0249d07751b1cc848c6ef1a3f9
+          path: chronos
+          persist-credentials: false
+      - name: Check out Daimon dependency
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: gantbd/daimon
+          ref: 325e662a6a945cf8a064b9812ebbbdac02be4130
+          path: daimon
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.95.0 --profile minimal --component clippy,rustfmt
+      - name: Install gate prerequisites
+        run: brew install ripgrep tmux
+      - name: Fetch locked dependencies
+        working-directory: daimon-tui
+        run: cargo fetch --locked
+      - name: Audit current RustSec advisories
+        working-directory: daimon-tui
+        run: |
+          cargo install cargo-audit --version 0.23.0 --locked
+          cargo audit --deny warnings
+      - name: Verify workspace and live profiles
+        working-directory: daimon-tui
+        run: make check
