@@ -1,7 +1,7 @@
 # Daimon TUI
 
-Status: locally qualified coordinated source candidate. Public GitHub
-reachability is not claimed until its exact revision and CI run are recorded in
+Status: published through the qualified GitHub source channel at the exact
+revision and CI run recorded in
 [`release/github-source.json`](release/github-source.json).
 
 Composable, read-only terminal presentation for Daimon's authenticated public

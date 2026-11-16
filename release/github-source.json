@@ -2,7 +2,9 @@
   "schema": 1,
   "channel": "github-coordinated-source",
   "daimonTuiRepository": "https://github.com/gantbd/daimon-tui",
-  "remoteReachabilityQualified": false,
+  "remoteReachabilityQualified": true,
+  "qualificationRevision": "109b4971f131c3cf7d5f84a7ff182bc340ade87c",
+  "qualificationRun": "https://github.com/gantbd/daimon-tui/actions/runs/43976275855",
   "dependencies": {
     "keystone": { "repository": "https://github.com/gantbd/keystone", "revision": "2e4faf10ec0a70805aa1db1555f93c77fcf0a1e4", "relativePath": "../keystone" },
     "aegis": { "repository": "https://github.com/gantbd/aegis", "revision": "b272106cf6d0093839a7d696c829bf8a408b0306", "relativePath": "../aegis" },
