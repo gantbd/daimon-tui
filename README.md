@@ -14,6 +14,7 @@ daimon-tui interactive /path/to/daimon.sock
 daimon-tui headless /path/to/daimon.sock
 daimon-tui agent-inspect /path/to/daimon-agent.sock AGENT_SESSION_HEX
 daimon-tui agent-interactive /path/to/daimon-agent.sock AGENT_SESSION_HEX
+daimon-tui agent-advance /path/to/daimon-agent.sock AGENT_SESSION_HEX TURN_HEX REVISION IDEMPOTENCY_KEY_HEX NOW 'ADVANCE DAIMON SESSION AGENT_SESSION_HEX TURN TURN_HEX REVISION REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'
 ```
 
 Headless mode uses `daimon_client::ReadOnlyClient` directly and creates no TUI
@@ -27,3 +28,12 @@ includes phase, revision, provider-profile document digest, complete capability
 bits, cursor evidence, and escaped event summaries. The opaque session remains
 configuration input: no catalogue is exposed, and the component cannot open,
 prompt, decide permission, advance, cancel, close, resume, or reattach a session.
+
+The separate `agent-advance` application command is an explicit operator path,
+not presentation authority. It reuses Daimon's owner-side guard to inspect the
+exact configured session on the same authenticated connection, require the
+current active turn and revision plus an exact confirmation, and attempt one
+bounded provider slice with a stable idempotency key. It never retries an
+uncertain delivery; the operator must inspect the retained session before any
+further action. `tests/live/agent_advance.sh` proves a confirmation mismatch
+causes no command and a real Unix-service success performs exactly one advance.

@@ -6,7 +6,8 @@ use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use daimon_client::{AgentReadOnlyClient, AgentServicePort, ReadOnlyClient, ServicePort};
 use daimon_protocol::{
-    AgentSessionIdV1, OutcomeV1, PresenceEntryV1, ReplyV1, SessionHandleV1,
+    AgentSessionIdV1, AgentTurnIdV1, IdempotencyKeyV1, OutcomeV1, PresenceEntryV1, ReplyV1,
+    SessionHandleV1,
     agent::{AgentEventPageV1, AgentEventV1, AgentOutcomeV1, AgentReplyV1, AgentSessionViewV1},
 };
 use ratatui::{
@@ -363,6 +364,18 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 pub fn parse_agent_session(value: &str) -> Option<AgentSessionIdV1> {
+    parse_opaque_id(value).map(AgentSessionIdV1::new)
+}
+
+pub fn parse_agent_turn(value: &str) -> Option<AgentTurnIdV1> {
+    parse_opaque_id(value).map(AgentTurnIdV1::new)
+}
+
+pub fn parse_idempotency_key(value: &str) -> Option<IdempotencyKeyV1> {
+    parse_opaque_id(value).map(IdempotencyKeyV1::new)
+}
+
+fn parse_opaque_id(value: &str) -> Option<[u8; 16]> {
     if value.len() != 32 {
         return None;
     }
@@ -370,7 +383,7 @@ pub fn parse_agent_session(value: &str) -> Option<AgentSessionIdV1> {
     for (index, byte) in bytes.iter_mut().enumerate() {
         *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).ok()?;
     }
-    Some(AgentSessionIdV1::new(bytes))
+    Some(bytes)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

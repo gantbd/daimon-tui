@@ -34,3 +34,22 @@ fn real_gate_uses_the_canonical_agent_socket_in_both_modes() {
         assert!(gate.contains(required), "real gate omits {required}");
     }
 }
+
+#[test]
+fn guarded_advance_reuses_the_owner_command_and_attempts_once() {
+    let cli = include_str!("../cli/src/main.rs");
+    assert!(cli.contains("daimon_agent_command::advance"));
+    assert!(cli.contains("agent-advance"));
+    assert!(!include_str!("../src/lib.rs").contains("AgentSessionClient"));
+
+    let gate = include_str!("live/agent_advance.sh");
+    for required in [
+        "agent_advance_fixture",
+        "confirmation_refused",
+        "agents.session.advance.v1",
+        "ADVANCE DAIMON SESSION",
+        "advanced",
+    ] {
+        assert!(gate.contains(required), "advance gate omits {required}");
+    }
+}

@@ -129,6 +129,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "daimon-agent-command"
+version = "0.1.0"
+dependencies = [
+ "daimon-client",
+ "daimon-protocol",
+]
+
+[[package]]
 name = "daimon-checkpoint"
 version = "0.1.0"
 dependencies = [
@@ -205,6 +213,7 @@ name = "daimon-tui-cli"
 version = "0.1.0"
 dependencies = [
  "crossterm",
+ "daimon-agent-command",
  "daimon-checkpoint",
  "daimon-client",
  "daimon-harness",

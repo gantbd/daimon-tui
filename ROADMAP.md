@@ -8,6 +8,9 @@
 - Redacted bounded presence with explicit refusal and transport uncertainty.
 - Exact configured `agents.session.inspect.v1` session/event observation over
   the public agent client, without a session catalogue.
+- Separate exact-confirmed `agents.session.advance.v1` operator command over the
+  same public client. It observes current state, attempts once and preserves
+  outcome uncertainty; the reusable presentation remains read-only.
 - No execution, resume, provider, tool, permission, reattach, or supervisor
   authority in presentation.
 
@@ -19,7 +22,9 @@
    qualified standalone without creating a global session catalogue. Compose
    the same component into Workbench next; legacy/model exact execution status
    remains a separate selected-ID slice.
-4. Add dispatch/resume only with confirmation, current authority, stable
-   idempotency identity, durable reconciliation, and no-redispatch evidence.
+4. Bounded active-turn advance now has confirmation, current-state fencing,
+   stable idempotency identity and no-retry evidence. Add prompt dispatch,
+   permission, cancellation or reattach only with their own authority and
+   durable uncertainty/reconciliation evidence.
 5. Add native Workbench hosting only after deployment-owned provider and
    credential composition is explicit.
