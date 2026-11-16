@@ -16,6 +16,7 @@ daimon-tui agent-inspect /path/to/daimon-agent.sock AGENT_SESSION_HEX
 daimon-tui agent-interactive /path/to/daimon-agent.sock AGENT_SESSION_HEX
 daimon-tui agent-advance /path/to/daimon-agent.sock AGENT_SESSION_HEX TURN_HEX REVISION IDEMPOTENCY_KEY_HEX NOW 'ADVANCE DAIMON SESSION AGENT_SESSION_HEX TURN TURN_HEX REVISION REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'
 daimon-tui agent-cancel /path/to/daimon-agent.sock AGENT_SESSION_HEX TURN_HEX REVISION IDEMPOTENCY_KEY_HEX NOW 'CANCEL DAIMON SESSION AGENT_SESSION_HEX TURN TURN_HEX REVISION REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'
+daimon-tui agent-close /path/to/daimon-agent.sock AGENT_SESSION_HEX REVISION IDEMPOTENCY_KEY_HEX NOW 'CLOSE DAIMON SESSION AGENT_SESSION_HEX REVISION REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'
 daimon-tui agent-prompt /path/to/daimon-agent.sock request.json prompt.txt 'PROMPT DAIMON SESSION …'
 daimon-tui agent-permission /path/to/daimon-agent.sock request.json 'DECIDE DAIMON PERMISSION …'
 ```
@@ -47,6 +48,12 @@ revision in either turn-active or permission-waiting state, exact confirmation,
 and one stable idempotency key. It attempts cancellation once and preserves an
 uncertain reply for later inspection. `tests/live/agent_cancel.sh` proves a
 confirmation mismatch cannot cancel and the real Unix path mutates once.
+
+The `agent-close` command separately fences an exact Ready revision with no
+active turn, preserving Daimon's requirement to cancel active work first. Its
+confirmation binds the session, revision, idempotency identity and time; the
+close is attempted once and uncertain delivery requires later inspection.
+`tests/live/agent_close.sh` proves confirmation refusal and one real mutation.
 
 The separate `agent-prompt` application command reads a strict credential-free
 execution document and bounded raw prompt file, then delegates to Daimon's

@@ -74,6 +74,25 @@ fn guarded_cancel_reuses_the_owner_command_and_attempts_once() {
 }
 
 #[test]
+fn guarded_close_reuses_the_owner_command_and_requires_ready_state() {
+    let cli = include_str!("../cli/src/main.rs");
+    assert!(cli.contains("daimon_agent_command::close"));
+    assert!(cli.contains("agent-close"));
+    assert!(!include_str!("../src/lib.rs").contains("AgentSessionClient"));
+
+    let gate = include_str!("live/agent_close.sh");
+    for required in [
+        "agent_close_fixture",
+        "confirmation_refused",
+        "agents.session.close.v1",
+        "CLOSE DAIMON SESSION",
+        "closed",
+    ] {
+        assert!(gate.contains(required), "close gate omits {required}");
+    }
+}
+
+#[test]
 fn guarded_prompt_reuses_the_owner_command_and_keeps_content_out_of_argv() {
     let cli = include_str!("../cli/src/main.rs");
     assert!(cli.contains("daimon_agent_command::prompt"));
