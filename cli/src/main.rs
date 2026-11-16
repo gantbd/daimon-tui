@@ -29,6 +29,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         return Ok(());
     }
+    if mode == "agent-inspect" || mode == "agent-interactive" {
+        let socket = args.next().map(PathBuf::from).ok_or_else(usage)?;
+        let session = args
+            .next()
+            .and_then(|value| daimon_tui::parse_agent_session(&value.to_string_lossy()))
+            .ok_or("agent session must be 32 hexadecimal digits")?;
+        if args.next().is_some() {
+            return Err(usage().into());
+        }
+        let (service_session, port) = daimon_client::unix::connect_agent(
+            socket,
+            daimon_wire::LimitsV1::default(),
+            daimon_wire::agent::AgentWireLimitsV1::default(),
+            Duration::from_secs(5),
+        )
+        .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+        return if mode == "agent-interactive" {
+            run_agent_interactive(daimon_tui::AgentComponent::new(
+                service_session,
+                port,
+                session,
+            ))
+        } else {
+            run_agent_headless(service_session, port, session)
+        };
+    }
     if mode != "interactive" && mode != "headless" {
         return Err(usage().into());
     }
@@ -54,6 +80,122 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         run_headless(session, port)
     }
+}
+
+#[cfg(unix)]
+fn run_agent_interactive(
+    mut component: daimon_tui::AgentComponent,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crossterm::event::{self, Event};
+    use std::time::Duration;
+
+    ratatui::run(|terminal| -> Result<(), Box<dyn std::error::Error>> {
+        loop {
+            component.poll();
+            terminal.draw(|frame| component.draw_in(frame, frame.area(), true))?;
+            if !event::poll(Duration::from_millis(50))? {
+                continue;
+            }
+            match event::read()? {
+                Event::Resize(..) => {}
+                Event::Key(key) => {
+                    let Some(input) = daimon_tui::translate_key(key) else {
+                        continue;
+                    };
+                    if component.update(input, true) == daimon_tui::Lifecycle::CloseRequested {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    })
+}
+
+#[cfg(unix)]
+fn run_agent_headless(
+    service_session: daimon_protocol::SessionHandleV1,
+    port: daimon_client::unix::AgentUnixPort,
+    session: daimon_protocol::AgentSessionIdV1,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use daimon_client::AgentReadOnlyClient;
+
+    let mut client = AgentReadOnlyClient::new(service_session, port);
+    match daimon_tui::observe_agent(&mut client, session) {
+        Ok(observation) => {
+            let view = observation.view;
+            let capabilities = view.capabilities;
+            let events = observation
+                .events
+                .entries
+                .iter()
+                .map(|record| {
+                    serde_json::json!({
+                        "cursor": record.cursor,
+                        "kind": agent_event_kind(&record.event),
+                    })
+                })
+                .collect::<Vec<_>>();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "version": 1,
+                    "mode": "headless",
+                    "complete": true,
+                    "peer": "daimon",
+                    "capability": "agents.session.inspect.v1",
+                    "status": "current",
+                    "revision": view.revision,
+                    "phase": format!("{:?}", view.phase),
+                    "active_turn": view.active_turn.map(|_| "present"),
+                    "last_event_cursor": view.last_event_cursor,
+                    "profile_document_digest": hex(&view.profile_document_digest.into_bytes()),
+                    "capabilities": {
+                        "load_session": capabilities.load_session,
+                        "resume_session": capabilities.resume_session,
+                        "permissions": capabilities.permissions,
+                        "filesystem_read": capabilities.filesystem_read,
+                        "filesystem_write": capabilities.filesystem_write,
+                        "terminal": capabilities.terminal,
+                        "session_modes": capabilities.session_modes,
+                        "session_models": capabilities.session_models,
+                    },
+                    "events": events,
+                    "truncated": observation.events.next_after.is_some(),
+                }))?
+            );
+            Ok(())
+        }
+        Err(error) => headless_failure_for("agents.session.inspect.v1", "unavailable", &error),
+    }
+}
+
+#[cfg(unix)]
+fn agent_event_kind(event: &daimon_protocol::agent::AgentEventV1) -> &'static str {
+    use daimon_protocol::agent::AgentEventV1;
+    match event {
+        AgentEventV1::AssistantMessage { .. } => "assistant_message",
+        AgentEventV1::Thought { .. } => "thought",
+        AgentEventV1::Plan { .. } => "plan",
+        AgentEventV1::ToolCall { .. } => "tool_call",
+        AgentEventV1::Terminal { .. } => "terminal",
+        AgentEventV1::Permission(_) => "permission",
+        AgentEventV1::FileChange { .. } => "file_change",
+        AgentEventV1::FileRead { .. } => "file_read",
+        AgentEventV1::Usage { .. } => "usage",
+        AgentEventV1::TurnFinished { .. } => "turn_finished",
+    }
+}
+
+#[cfg(unix)]
+fn hex(bytes: &[u8]) -> String {
+    let mut value = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write;
+        write!(&mut value, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    value
 }
 
 #[cfg(unix)]
@@ -134,6 +276,15 @@ fn run_headless(
 
 #[cfg(unix)]
 fn headless_failure(status: &str, message: &str) -> Result<(), Box<dyn std::error::Error>> {
+    headless_failure_for(daimon_tui::CAPABILITIES.headless[0], status, message)
+}
+
+#[cfg(unix)]
+fn headless_failure_for(
+    capability: &str,
+    status: &str,
+    message: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let manifest = daimon_tui::CAPABILITIES;
     println!(
         "{}",
@@ -142,7 +293,7 @@ fn headless_failure(status: &str, message: &str) -> Result<(), Box<dyn std::erro
             "mode": "headless",
             "complete": false,
             "peer": manifest.peer,
-            "capability": manifest.headless[0],
+            "capability": capability,
             "status": status,
         }))?
     );
@@ -150,7 +301,7 @@ fn headless_failure(status: &str, message: &str) -> Result<(), Box<dyn std::erro
 }
 
 fn usage() -> &'static str {
-    "usage: daimon-tui capabilities | daimon-tui <interactive|headless> SOCKET\nheadless emits one bounded versioned agents.presence.v1 observation without constructing TUI state"
+    "usage: daimon-tui capabilities | daimon-tui <interactive|headless> SOCKET | daimon-tui <agent-inspect|agent-interactive> SOCKET AGENT_SESSION_HEX\nheadless commands emit bounded versioned observations without constructing TUI state"
 }
 
 #[cfg(not(unix))]
