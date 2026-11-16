@@ -55,6 +55,25 @@ fn guarded_advance_reuses_the_owner_command_and_attempts_once() {
 }
 
 #[test]
+fn guarded_cancel_reuses_the_owner_command_and_attempts_once() {
+    let cli = include_str!("../cli/src/main.rs");
+    assert!(cli.contains("daimon_agent_command::cancel"));
+    assert!(cli.contains("agent-cancel"));
+    assert!(!include_str!("../src/lib.rs").contains("AgentSessionClient"));
+
+    let gate = include_str!("live/agent_cancel.sh");
+    for required in [
+        "agent_cancel_fixture",
+        "confirmation_refused",
+        "agents.session.cancel.v1",
+        "CANCEL DAIMON SESSION",
+        "cancelled",
+    ] {
+        assert!(gate.contains(required), "cancel gate omits {required}");
+    }
+}
+
+#[test]
 fn guarded_prompt_reuses_the_owner_command_and_keeps_content_out_of_argv() {
     let cli = include_str!("../cli/src/main.rs");
     assert!(cli.contains("daimon_agent_command::prompt"));

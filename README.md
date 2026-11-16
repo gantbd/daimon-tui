@@ -15,6 +15,7 @@ daimon-tui headless /path/to/daimon.sock
 daimon-tui agent-inspect /path/to/daimon-agent.sock AGENT_SESSION_HEX
 daimon-tui agent-interactive /path/to/daimon-agent.sock AGENT_SESSION_HEX
 daimon-tui agent-advance /path/to/daimon-agent.sock AGENT_SESSION_HEX TURN_HEX REVISION IDEMPOTENCY_KEY_HEX NOW 'ADVANCE DAIMON SESSION AGENT_SESSION_HEX TURN TURN_HEX REVISION REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'
+daimon-tui agent-cancel /path/to/daimon-agent.sock AGENT_SESSION_HEX TURN_HEX REVISION IDEMPOTENCY_KEY_HEX NOW 'CANCEL DAIMON SESSION AGENT_SESSION_HEX TURN TURN_HEX REVISION REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'
 daimon-tui agent-prompt /path/to/daimon-agent.sock request.json prompt.txt 'PROMPT DAIMON SESSION …'
 daimon-tui agent-permission /path/to/daimon-agent.sock request.json 'DECIDE DAIMON PERMISSION …'
 ```
@@ -39,6 +40,13 @@ bounded provider slice with a stable idempotency key. It never retries an
 uncertain delivery; the operator must inspect the retained session before any
 further action. `tests/live/agent_advance.sh` proves a confirmation mismatch
 causes no command and a real Unix-service success performs exactly one advance.
+
+The separate `agent-cancel` application command uses the same owner-command
+boundary for authority attenuation. It requires the exact active turn and
+revision in either turn-active or permission-waiting state, exact confirmation,
+and one stable idempotency key. It attempts cancellation once and preserves an
+uncertain reply for later inspection. `tests/live/agent_cancel.sh` proves a
+confirmation mismatch cannot cancel and the real Unix path mutates once.
 
 The separate `agent-prompt` application command reads a strict credential-free
 execution document and bounded raw prompt file, then delegates to Daimon's
