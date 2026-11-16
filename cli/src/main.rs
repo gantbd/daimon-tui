@@ -38,6 +38,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if mode == "agent-close" {
         return agent_close(args);
     }
+    if mode == "agent-reattach" {
+        return agent_reattach(args);
+    }
     if mode == "agent-prompt" {
         return agent_prompt(args);
     }
@@ -556,6 +559,117 @@ fn agent_close_failure(
 }
 
 #[cfg(unix)]
+fn agent_reattach(
+    mut args: impl Iterator<Item = std::ffi::OsString>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use daimon_agent_command::{ReattachError, parse_reattach_document};
+    use daimon_client::unix::AgentClientErrorV1;
+    use daimon_protocol::agent::AgentOutcomeV1;
+    use std::{path::PathBuf, time::Duration};
+
+    let socket = args.next().map(PathBuf::from).ok_or_else(usage)?;
+    let document_path = args.next().map(PathBuf::from).ok_or_else(usage)?;
+    let confirmation = args
+        .next()
+        .and_then(|value| value.into_string().ok())
+        .ok_or_else(usage)?;
+    if args.next().is_some() {
+        return Err(usage().into());
+    }
+    let document = read_bounded(&document_path, 64 * 1024)?;
+    let request = parse_reattach_document(&document)
+        .map_err(|error| format!("Daimon reattach document refused: {error:?}"))?;
+    let (service_session, port) = match daimon_client::unix::connect_agent(
+        socket,
+        daimon_wire::LimitsV1::default(),
+        daimon_wire::agent::AgentWireLimitsV1::default(),
+        Duration::from_secs(5),
+    ) {
+        Ok(connection) => connection,
+        Err(error) => return agent_reattach_failure("not_sent", &format!("{error:?}"), None, None),
+    };
+    match daimon_agent_command::reattach(service_session, port, request, &confirmation) {
+        Ok(AgentOutcomeV1::Session(view)) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "version": 1,
+                    "peer": "daimon",
+                    "capability": daimon_agent_command::REATTACH_CAPABILITY,
+                    "complete": true,
+                    "status": "reattached",
+                    "revision": view.revision,
+                    "phase": format!("{:?}", view.phase),
+                    "active_turn": view.active_turn.map(|_| "present"),
+                    "last_event_cursor": view.last_event_cursor,
+                }))?
+            );
+            Ok(())
+        }
+        Ok(AgentOutcomeV1::OutcomeUnknown { .. }) => agent_reattach_failure(
+            "outcome_unknown",
+            "Daimon retained an indeterminate reattach outcome; inspect before any further action",
+            None,
+            None,
+        ),
+        Ok(AgentOutcomeV1::Events(_)) => agent_reattach_failure(
+            "invalid_reply",
+            "unexpected Daimon reattach reply",
+            None,
+            None,
+        ),
+        Err(ReattachError::ConfirmationMismatch { required }) => agent_reattach_failure(
+            "confirmation_refused",
+            "exact Daimon reattach confirmation required",
+            Some(&required),
+            None,
+        ),
+        Err(ReattachError::SessionChanged { actual }) => agent_reattach_failure(
+            "stale_session",
+            "Daimon session must remain at the exact resume-capable detached revision",
+            None,
+            Some(&actual),
+        ),
+        Err(ReattachError::MutationTransport(AgentClientErrorV1::OutcomeUnknown(error))) => {
+            agent_reattach_failure("outcome_unknown", &format!("{error:?}"), None, None)
+        }
+        Err(ReattachError::ObservationTransport(AgentClientErrorV1::NotSent(error)))
+        | Err(ReattachError::MutationTransport(AgentClientErrorV1::NotSent(error))) => {
+            agent_reattach_failure("not_sent", &format!("{error:?}"), None, None)
+        }
+        Err(ReattachError::ObservationRefused(refusal))
+        | Err(ReattachError::MutationRefused(refusal)) => {
+            agent_reattach_failure("refused", &format!("{refusal:?}"), None, None)
+        }
+        Err(error) => agent_reattach_failure("unavailable", &format!("{error:?}"), None, None),
+    }
+}
+
+#[cfg(unix)]
+fn agent_reattach_failure(
+    status: &str,
+    message: &str,
+    required_confirmation: Option<&str>,
+    actual: Option<&daimon_protocol::agent::AgentSessionViewV1>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "version": 1,
+            "peer": "daimon",
+            "capability": daimon_agent_command::REATTACH_CAPABILITY,
+            "complete": false,
+            "status": status,
+            "required_confirmation": required_confirmation,
+            "actual_revision": actual.map(|view| view.revision),
+            "actual_phase": actual.map(|view| format!("{:?}", view.phase)),
+            "actual_active_turn": actual.and_then(|view| view.active_turn).map(|_| "present"),
+        }))?
+    );
+    Err(std::io::Error::other(message).into())
+}
+
+#[cfg(unix)]
 fn parse_u64(value: Option<std::ffi::OsString>) -> Result<u64, Box<dyn std::error::Error>> {
     value
         .and_then(|value| value.into_string().ok())
@@ -949,7 +1063,7 @@ fn headless_failure_for(
 }
 
 fn usage() -> &'static str {
-    "usage: daimon-tui capabilities | daimon-tui <interactive|headless> SOCKET | daimon-tui <agent-inspect|agent-interactive> SOCKET AGENT_SESSION_HEX\ndaimon-tui agent-advance SOCKET AGENT_SESSION_HEX TURN_HEX EXPECTED_REVISION IDEMPOTENCY_KEY_HEX NOW 'ADVANCE DAIMON SESSION AGENT_SESSION_HEX TURN TURN_HEX REVISION EXPECTED_REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'\ndaimon-tui agent-cancel SOCKET AGENT_SESSION_HEX TURN_HEX EXPECTED_REVISION IDEMPOTENCY_KEY_HEX NOW 'CANCEL DAIMON SESSION AGENT_SESSION_HEX TURN TURN_HEX REVISION EXPECTED_REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'\ndaimon-tui agent-close SOCKET AGENT_SESSION_HEX EXPECTED_REVISION IDEMPOTENCY_KEY_HEX NOW 'CLOSE DAIMON SESSION AGENT_SESSION_HEX REVISION EXPECTED_REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'\ndaimon-tui agent-prompt SOCKET REQUEST_JSON PROMPT_FILE 'PROMPT DAIMON SESSION …'\ndaimon-tui agent-permission SOCKET REQUEST_JSON 'DECIDE DAIMON PERMISSION …'\nheadless commands emit bounded versioned observations without constructing TUI state; agent mutations observe exact current state and attempt once without retry"
+    "usage: daimon-tui capabilities | daimon-tui <interactive|headless> SOCKET | daimon-tui <agent-inspect|agent-interactive> SOCKET AGENT_SESSION_HEX\ndaimon-tui agent-advance SOCKET AGENT_SESSION_HEX TURN_HEX EXPECTED_REVISION IDEMPOTENCY_KEY_HEX NOW 'ADVANCE DAIMON SESSION AGENT_SESSION_HEX TURN TURN_HEX REVISION EXPECTED_REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'\ndaimon-tui agent-cancel SOCKET AGENT_SESSION_HEX TURN_HEX EXPECTED_REVISION IDEMPOTENCY_KEY_HEX NOW 'CANCEL DAIMON SESSION AGENT_SESSION_HEX TURN TURN_HEX REVISION EXPECTED_REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'\ndaimon-tui agent-close SOCKET AGENT_SESSION_HEX EXPECTED_REVISION IDEMPOTENCY_KEY_HEX NOW 'CLOSE DAIMON SESSION AGENT_SESSION_HEX REVISION EXPECTED_REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'\ndaimon-tui agent-reattach SOCKET REQUEST_JSON 'REATTACH DAIMON SESSION …'\ndaimon-tui agent-prompt SOCKET REQUEST_JSON PROMPT_FILE 'PROMPT DAIMON SESSION …'\ndaimon-tui agent-permission SOCKET REQUEST_JSON 'DECIDE DAIMON PERMISSION …'\nheadless commands emit bounded versioned observations without constructing TUI state; agent mutations observe exact current state and attempt once without retry"
 }
 
 #[cfg(not(unix))]

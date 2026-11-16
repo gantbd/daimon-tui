@@ -17,6 +17,7 @@ daimon-tui agent-interactive /path/to/daimon-agent.sock AGENT_SESSION_HEX
 daimon-tui agent-advance /path/to/daimon-agent.sock AGENT_SESSION_HEX TURN_HEX REVISION IDEMPOTENCY_KEY_HEX NOW 'ADVANCE DAIMON SESSION AGENT_SESSION_HEX TURN TURN_HEX REVISION REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'
 daimon-tui agent-cancel /path/to/daimon-agent.sock AGENT_SESSION_HEX TURN_HEX REVISION IDEMPOTENCY_KEY_HEX NOW 'CANCEL DAIMON SESSION AGENT_SESSION_HEX TURN TURN_HEX REVISION REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'
 daimon-tui agent-close /path/to/daimon-agent.sock AGENT_SESSION_HEX REVISION IDEMPOTENCY_KEY_HEX NOW 'CLOSE DAIMON SESSION AGENT_SESSION_HEX REVISION REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'
+daimon-tui agent-reattach /path/to/daimon-agent.sock request.json 'REATTACH DAIMON SESSION …'
 daimon-tui agent-prompt /path/to/daimon-agent.sock request.json prompt.txt 'PROMPT DAIMON SESSION …'
 daimon-tui agent-permission /path/to/daimon-agent.sock request.json 'DECIDE DAIMON PERMISSION …'
 ```
@@ -54,6 +55,13 @@ active turn, preserving Daimon's requirement to cancel active work first. Its
 confirmation binds the session, revision, idempotency identity and time; the
 close is attempted once and uncertain delivery requires later inspection.
 `tests/live/agent_close.sh` proves confirmation refusal and one real mutation.
+
+The `agent-reattach` command reads a strict credential-free execution document,
+binds its complete envelope to an exact confirmation, and accepts only the
+exact resume-capable `ReattachRequired` revision with no active turn. It makes
+one public-client mutation without replaying history, submitting a prompt, or
+retrying uncertain delivery. `tests/live/agent_reattach.sh` proves confirmation
+refusal and one real reattach.
 
 The separate `agent-prompt` application command reads a strict credential-free
 execution document and bounded raw prompt file, then delegates to Daimon's

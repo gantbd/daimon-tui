@@ -93,6 +93,27 @@ fn guarded_close_reuses_the_owner_command_and_requires_ready_state() {
 }
 
 #[test]
+fn guarded_reattach_reuses_the_owner_command_and_requires_detached_state() {
+    let cli = include_str!("../cli/src/main.rs");
+    assert!(cli.contains("daimon_agent_command::reattach"));
+    assert!(cli.contains("parse_reattach_document"));
+    assert!(cli.contains("agent-reattach"));
+    assert!(!include_str!("../src/lib.rs").contains("AgentSessionClient"));
+
+    let gate = include_str!("live/agent_reattach.sh");
+    for required in [
+        "agent_reattach_fixture",
+        "confirmation_refused",
+        "agents.session.reattach.v1",
+        "REATTACH DAIMON SESSION",
+        "ENVELOPE",
+        "reattached",
+    ] {
+        assert!(gate.contains(required), "reattach gate omits {required}");
+    }
+}
+
+#[test]
 fn guarded_prompt_reuses_the_owner_command_and_keeps_content_out_of_argv() {
     let cli = include_str!("../cli/src/main.rs");
     assert!(cli.contains("daimon_agent_command::prompt"));
