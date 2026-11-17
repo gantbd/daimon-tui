@@ -50,6 +50,7 @@ enum Mode {
     Close,
     CloseUnknown,
     Prompt,
+    PromptLens,
     Permission,
     Reattach,
 }
@@ -155,7 +156,8 @@ impl AgentServicePort for Port {
                 )
             }
             AgentCommandV1::Prompt { request, .. }
-                if request.expected_revision == 12 && self.mode == Mode::Prompt =>
+                if request.expected_revision == 12
+                    && matches!(self.mode, Mode::Prompt | Mode::PromptLens) =>
             {
                 self.session_index(request.session).map_or_else(
                     || AgentReplyV1::Refused(AgentRefusalV1::UnknownAgentSession),
@@ -164,7 +166,19 @@ impl AgentServicePort for Port {
                             !self.completed[index],
                             "session prompt attempted more than once"
                         );
-                        assert_eq!(request.prompt, b"inspect\nreport drift");
+                        if self.mode == Mode::PromptLens {
+                            let prompt = std::str::from_utf8(&request.prompt)
+                                .expect("lens prompt is bounded UTF-8 text");
+                            assert!(prompt.contains("product-owner collaboration lens"));
+                            assert!(prompt.contains("not a human identity"));
+                            assert!(
+                                prompt.contains("not a human identity")
+                                    && prompt.contains("authority")
+                            );
+                            assert!(prompt.ends_with("Work item:\ninspect\nreport drift"));
+                        } else {
+                            assert_eq!(request.prompt, b"inspect\nreport drift");
+                        }
                         self.completed[index] = true;
                         self.turns[index] = Some(request.turn);
                         let mut marker = OpenOptions::new()
@@ -310,11 +324,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(value) if value == "close" => Mode::Close,
         Some(value) if value == "close-unknown" => Mode::CloseUnknown,
         Some(value) if value == "prompt" => Mode::Prompt,
+        Some(value) if value == "prompt-lens" => Mode::PromptLens,
         Some(value) if value == "permission" => Mode::Permission,
         Some(value) if value == "reattach" => Mode::Reattach,
         Some(_) => {
             return Err(
-                "mode must be close, close-unknown, prompt, permission, or reattach".into(),
+                "mode must be close, close-unknown, prompt, prompt-lens, permission, or reattach"
+                    .into(),
             );
         }
     };
