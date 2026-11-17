@@ -13,8 +13,14 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-cargo run --quiet --manifest-path "$root/Cargo.toml" -p daimon-tui-cli \
-  --example real_daemon_fixture -- "$tmp/store" "$tmp/daimon.sock" \
+cargo build --quiet --manifest-path "$root/Cargo.toml" -p daimon-tui-cli \
+  --bin daimon-tui --example real_daemon_fixture --example agent_daemon_fixture \
+  --locked --offline
+presence_fixture="$root/target/debug/examples/real_daemon_fixture"
+agent_fixture="$root/target/debug/examples/agent_daemon_fixture"
+client="$root/target/debug/daimon-tui"
+
+"$presence_fixture" "$tmp/store" "$tmp/daimon.sock" \
   >"$tmp/daemon.out" 2>"$tmp/daemon.err" &
 fixture_pid=$!
 
@@ -28,8 +34,7 @@ while [ ! -S "$tmp/daimon.sock" ]; do
   sleep 0.05
 done
 
-output=$(cargo run --quiet --manifest-path "$root/Cargo.toml" -p daimon-tui-cli \
-  -- headless "$tmp/daimon.sock")
+output=$("$client" headless "$tmp/daimon.sock")
 wait "$fixture_pid"
 fixture_pid=
 
@@ -38,10 +43,6 @@ printf '%s\n' "$output" | grep '"capability": "agents.presence.v1"' >/dev/null
 printf '%s\n' "$output" | grep '"agents": 1' >/dev/null
 printf '%s\n' "$output" | grep '"current": 1' >/dev/null
 
-cargo build --quiet --manifest-path "$root/Cargo.toml" -p daimon-tui-cli \
-  --bin daimon-tui --example agent_daemon_fixture --locked --offline
-agent_fixture="$root/target/debug/examples/agent_daemon_fixture"
-client="$root/target/debug/daimon-tui"
 agent_session=07070707070707070707070707070707
 
 "$agent_fixture" "$tmp/agent-headless.sock" >"$tmp/agent-headless.out" \
