@@ -12,6 +12,7 @@ publish = false
 description = "Composable terminal presentation for Daimon operations"
 
 [dependencies]
+daimon-agent-command = { version = "=0.1.0", path = "../daimon/crates/daimon-agent-command" }
 daimon-client = { version = "=0.1.0", path = "../daimon/crates/daimon-client" }
 daimon-protocol = { version = "=0.1.0", path = "../daimon/crates/daimon-protocol" }
 ratatui = { version = "=0.30.2", default-features = false }

@@ -4,11 +4,59 @@ Status: published through the qualified GitHub source channel at the exact
 revision and CI run recorded in
 [`release/github-source.json`](release/github-source.json).
 
-Composable, read-only terminal presentation for Daimon's authenticated public
-clients. The reusable library owns bounded agent-presence projection and exact
-configured agent-session/event observation, local selection, input, and
-lifecycle output. It owns no provider dispatch, execution authority, terminal
-lifecycle, CLI parsing, daemon startup, or process exit.
+Composable terminal presentation and closed guarded controls for Daimon's
+authenticated public clients. The reusable library owns bounded agent-presence
+projection, exact configured agent-session/event observation, local selection,
+input, lifecycle output, and exact prompt/permission/reattach/advance/cancel/close proposal sheets.
+The session-set component accepts 1–16 unique exact session identities, provides
+sparse selection with focused-item fallback, and observes a requested set over
+one bounded connection that is released before control. The batch component
+settles every child independently, retains each owner-returned session
+projection, and stops with later children visibly NotSent after an unknown or
+failed outcome. It owns
+no provider policy, execution authority, terminal lifecycle, CLI parsing,
+daemon startup, or process exit.
+
+Each session row and evidence pane derives phase-aware work candidates from the
+owner projection: prompt/close, advance/cancel, permission decision/cancel,
+reattach, inspect, or no further work. The UI labels these as candidates with
+authority still required; it never treats a phase hint as permission to act.
+
+Outcome-unknown batches retain the exact sent-session set. A host can request
+one bounded read-only recovery pass for those sessions, mark the evidence as
+inspected, and then permit dismissal without retrying or restyling the original
+mutation as successful.
+
+The reusable guarded-control component accepts caller-generated execution,
+operation identity, and time, displays the complete revision-bound proposal,
+requires a distinct `c` arm step followed by Enter, and invokes Daimon's existing owner
+guard exactly once. A mutation transport failure or outcome-unknown response
+permanently fences the sheet; it never retries. The host must explicitly return
+to the selected session observation for recovery.
+
+Prompt runs use that same bounded 1–16 child ledger. Prompt bytes stay inside
+the owner request, while the sheet presents only their digest and the digest of
+the full credential-free execution envelope. Each selected session has an
+independent turn, execution, and idempotency identity; a lost mutation reply
+stops the run with later children visibly NotSent.
+
+Permission composition is challenge-native rather than a generic approval
+toggle. It presents each selected session's escaped capability, description,
+and owner-published option list, defaults to `RejectOnce` when available, and
+retains a distinct choice per session. The final exact sheet binds the current
+revision, event cursor, request, option, full challenge digest, fresh execution
+envelope, and idempotency key before the owner guard re-observes and submits.
+
+Reattachment uses the same bounded child ledger. Every selected detached
+session receives a fresh caller-created execution envelope, an exact revision
+guard, and an independent owner receipt; failed or outcome-unknown children
+leave later requests visibly NotSent rather than guessing or retrying.
+
+The production host should use the connector-based session-set constructor.
+Instrumentation tests prove a 16-session refresh has at most one simultaneous
+owner connection and releases it between refreshes. This matters because the
+canonical local daemon services bounded connections serially; the N-session UI
+therefore does not consume O(N) connections or starve guarded controls.
 
 The separate standalone CLI supports:
 
@@ -32,11 +80,18 @@ contains only age and stale/current classification.
 
 The exact agent-session commands use `AgentReadOnlyClient` over Daimon's
 distinct canonical agent socket. They double-read the configured session around
-one bounded contiguous event page and reject a mixed snapshot. The projection
+the recent bounded contiguous 64-event tail and reject a mixed snapshot. The projection
 includes phase, revision, provider-profile document digest, complete capability
 bits, cursor evidence, and escaped event summaries. The opaque session remains
-configuration input: no catalogue is exposed, and the component cannot open,
-prompt, decide permission, advance, cancel, close, resume, or reattach a session.
+configuration input: no catalogue is exposed. The read-only agent component
+itself cannot mutate a session; guarded actions live in the separate
+exact-proposal component.
+
+The bounded session-set component can cycle the already-observed event windows
+through all, conversation, action, decision, and usage projections. It reports
+exact configured/current/unavailable/marked cardinality and totals input/output
+usage across the current owner-published windows. Filtering never changes what
+is read, retained, or authorized and does not infer provider costs or policy.
 
 The separate `agent-advance` application command is an explicit operator path,
 not presentation authority. It reuses Daimon's owner-side guard to inspect the

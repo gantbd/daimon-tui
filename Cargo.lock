@@ -206,6 +206,7 @@ name = "daimon-tui"
 version = "0.1.0"
 dependencies = [
  "crossterm",
+ "daimon-agent-command",
  "daimon-client",
  "daimon-protocol",
  "ratatui",

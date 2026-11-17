@@ -1,6 +1,21 @@
 //! Composable, read-only Ratatui presentation over Daimon's public client.
 #![forbid(unsafe_code)]
 
+mod agent_set;
+mod control;
+mod permission_composer;
+mod prompt_composer;
+pub use agent_set::{AgentSetComponent, AgentSetInput};
+pub use control::{
+    AgentControlBatchComponent, AgentControlChildDisposition, AgentControlComponent,
+    AgentControlDisposition, AgentControlInput, AgentControlRequest, AgentPermissionControlRequest,
+};
+pub use permission_composer::{
+    AgentPermissionChallenge, AgentPermissionComposer, AgentPermissionInput,
+    AgentPermissionOutcome, AgentPermissionSelection,
+};
+pub use prompt_composer::{AgentPromptComposer, AgentPromptInput, AgentPromptOutcome};
+
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -8,7 +23,10 @@ use daimon_client::{AgentReadOnlyClient, AgentServicePort, ReadOnlyClient, Servi
 use daimon_protocol::{
     AgentSessionIdV1, AgentTurnIdV1, IdempotencyKeyV1, OutcomeV1, PresenceEntryV1, ReplyV1,
     SessionHandleV1,
-    agent::{AgentEventPageV1, AgentEventV1, AgentOutcomeV1, AgentReplyV1, AgentSessionViewV1},
+    agent::{
+        AgentEventPageV1, AgentEventV1, AgentOutcomeV1, AgentReplyV1, AgentSessionPhaseV1,
+        AgentSessionViewV1,
+    },
 };
 use ratatui::{
     Frame,
@@ -31,7 +49,15 @@ pub struct CapabilityManifest {
 pub const CAPABILITIES: CapabilityManifest = CapabilityManifest {
     schema: 1,
     peer: "daimon",
-    interactive: &["agents.presence.v1", "agents.session.inspect.v1"],
+    interactive: &[
+        "agents.presence.v1",
+        "agents.session.inspect.v1",
+        "agents.session-set.inspect.v1",
+        "agents.session-set.control.v1",
+        "agents.session-set.prompt.v1",
+        "agents.session-set.permission.v1",
+        "agents.session-set.reattach.v1",
+    ],
     headless: &["agents.presence.v1", "agents.session.inspect.v1"],
 };
 
@@ -47,6 +73,66 @@ pub enum Input {
 pub struct AgentObservation {
     pub view: AgentSessionViewV1,
     pub events: AgentEventPageV1,
+}
+
+/// Operator-selected projection over the owner-published event window.
+///
+/// Filters never affect observation, authority, or retention. They only reduce
+/// the already-bounded event page shown in the terminal.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum AgentEventFilter {
+    #[default]
+    All,
+    Conversation,
+    Actions,
+    Decisions,
+    Usage,
+}
+
+impl AgentEventFilter {
+    pub const fn next(self) -> Self {
+        match self {
+            Self::All => Self::Conversation,
+            Self::Conversation => Self::Actions,
+            Self::Actions => Self::Decisions,
+            Self::Decisions => Self::Usage,
+            Self::Usage => Self::All,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Conversation => "conversation",
+            Self::Actions => "actions",
+            Self::Decisions => "decisions",
+            Self::Usage => "usage",
+        }
+    }
+
+    pub const fn includes(self, event: &AgentEventV1) -> bool {
+        match self {
+            Self::All => true,
+            Self::Conversation => matches!(
+                event,
+                AgentEventV1::AssistantMessage { .. }
+                    | AgentEventV1::Thought { .. }
+                    | AgentEventV1::Plan { .. }
+            ),
+            Self::Actions => matches!(
+                event,
+                AgentEventV1::ToolCall { .. }
+                    | AgentEventV1::Terminal { .. }
+                    | AgentEventV1::FileChange { .. }
+                    | AgentEventV1::FileRead { .. }
+            ),
+            Self::Decisions => matches!(
+                event,
+                AgentEventV1::Permission(_) | AgentEventV1::TurnFinished { .. }
+            ),
+            Self::Usage => matches!(event, AgentEventV1::Usage { .. }),
+        }
+    }
 }
 
 struct AgentWorkerReply(Result<AgentObservation, String>);
@@ -97,17 +183,32 @@ impl AgentComponent {
     }
 
     pub fn poll(&mut self) {
+        let _ = self.poll_settlement();
+    }
+
+    pub fn poll_settlement(&mut self) -> Option<Result<(), ()>> {
+        let mut settlement = None;
         loop {
             match self.replies.try_recv() {
-                Ok(reply) => self.admit(reply),
+                Ok(reply) => {
+                    settlement = Some(if self.admit(reply) { Ok(()) } else { Err(()) });
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
+                    if self.pending {
+                        settlement = Some(Err(()));
+                    }
                     self.pending = false;
                     self.notice = "Daimon agent worker unavailable".into();
                     break;
                 }
             }
         }
+        settlement
+    }
+
+    pub const fn request_pending(&self) -> bool {
+        self.pending
     }
 
     pub fn update(&mut self, input: Input, focused: bool) -> Lifecycle {
@@ -165,7 +266,7 @@ impl AgentComponent {
         }
     }
 
-    fn admit(&mut self, AgentWorkerReply(reply): AgentWorkerReply) {
+    fn admit(&mut self, AgentWorkerReply(reply): AgentWorkerReply) -> bool {
         self.pending = false;
         match reply {
             Ok(observation) if observation.view.session == self.session => {
@@ -178,9 +279,16 @@ impl AgentComponent {
                     format!("{} agent event(s)", observation.events.entries.len())
                 };
                 self.observation = Some(observation);
+                true
             }
-            Ok(_) => self.notice = "Invalid Daimon agent session reply".into(),
-            Err(error) => self.notice = error,
+            Ok(_) => {
+                self.notice = "Invalid Daimon agent session reply".into();
+                false
+            }
+            Err(error) => {
+                self.notice = error;
+                false
+            }
         }
     }
 }
@@ -190,8 +298,12 @@ pub fn observe_agent<P: AgentServicePort>(
     session: AgentSessionIdV1,
 ) -> Result<AgentObservation, String> {
     let before = inspect_agent(client, session)?;
+    let after = before
+        .last_event_cursor
+        .filter(|cursor| *cursor >= AGENT_EVENT_LIMIT)
+        .map(|cursor| cursor - AGENT_EVENT_LIMIT);
     let events = match client
-        .events(session, None, AGENT_EVENT_LIMIT)
+        .events(session, after, AGENT_EVENT_LIMIT)
         .map_err(|_| "Daimon agent events unavailable; outcome not inferred")?
     {
         AgentReplyV1::Accepted(AgentOutcomeV1::Events(page)) if page.session == session => page,
@@ -240,13 +352,31 @@ fn inspect_agent<P: AgentServicePort>(
     }
 }
 
-fn agent_lines(observation: &AgentObservation, selected: usize) -> Vec<Line<'static>> {
+pub(crate) fn agent_lines(observation: &AgentObservation, selected: usize) -> Vec<Line<'static>> {
+    agent_lines_with_filter(observation, selected, AgentEventFilter::All)
+}
+
+pub(crate) fn agent_lines_with_filter(
+    observation: &AgentObservation,
+    selected: usize,
+    filter: AgentEventFilter,
+) -> Vec<Line<'static>> {
     let view = &observation.view;
     let capabilities = view.capabilities;
+    let visible = observation
+        .events
+        .entries
+        .iter()
+        .filter(|record| filter.includes(&record.event))
+        .count();
     let mut lines = vec![
         Line::from(format!(
             "phase/revision: {:?}/{}",
             view.phase, view.revision
+        )),
+        Line::from(format!(
+            "owner-state candidates (authority still required): {}",
+            phase_actions(view)
         )),
         Line::from(format!("active turn: {:?}", view.active_turn)),
         Line::from(format!("last event cursor: {:?}", view.last_event_cursor)),
@@ -266,16 +396,24 @@ fn agent_lines(observation: &AgentObservation, selected: usize) -> Vec<Line<'sta
             hex(&view.profile_document_digest.into_bytes())
         )),
         Line::from(format!(
-            "events: {}{}",
+            "events: {} visible / {} observed{} · filter {}",
+            visible,
             observation.events.entries.len(),
             if observation.events.next_after.is_some() {
                 "+"
             } else {
                 ""
-            }
+            },
+            filter.label(),
         )),
     ];
-    for (index, record) in observation.events.entries.iter().enumerate() {
+    for (index, record) in observation
+        .events
+        .entries
+        .iter()
+        .filter(|record| filter.includes(&record.event))
+        .enumerate()
+    {
         let marker = if index == selected { ">" } else { " " };
         lines.push(Line::from(format!(
             "{marker} {}  {}",
@@ -284,6 +422,26 @@ fn agent_lines(observation: &AgentObservation, selected: usize) -> Vec<Line<'sta
         )));
     }
     lines
+}
+
+pub(crate) fn phase_actions(view: &AgentSessionViewV1) -> &'static str {
+    match view.phase {
+        AgentSessionPhaseV1::Opening => "wait for readiness",
+        AgentSessionPhaseV1::Ready if view.active_turn.is_none() => "prompt · close",
+        AgentSessionPhaseV1::Ready => "inspect inconsistent active-turn evidence",
+        AgentSessionPhaseV1::ReattachRequired if view.capabilities.resume_session => "reattach",
+        AgentSessionPhaseV1::ReattachRequired => "inspect; resume unsupported",
+        AgentSessionPhaseV1::TurnActive if view.active_turn.is_some() => "advance · cancel",
+        AgentSessionPhaseV1::TurnActive => "inspect missing active-turn evidence",
+        AgentSessionPhaseV1::AwaitingPermission
+            if view.active_turn.is_some() && view.capabilities.permissions =>
+        {
+            "decide permission · cancel"
+        }
+        AgentSessionPhaseV1::AwaitingPermission => "inspect permission evidence",
+        AgentSessionPhaseV1::OutcomeUnknown => "inspect; never retry implicitly",
+        AgentSessionPhaseV1::Closed => "none; session closed",
+    }
 }
 
 fn event_summary(event: &AgentEventV1) -> String {
@@ -340,7 +498,7 @@ fn event_summary(event: &AgentEventV1) -> String {
     }
 }
 
-fn escaped(bytes: &[u8]) -> String {
+pub(crate) fn escaped(bytes: &[u8]) -> String {
     const LIMIT: usize = 96;
     let mut value = String::new();
     for byte in bytes.iter().take(LIMIT) {
@@ -448,17 +606,32 @@ impl Component {
     }
 
     pub fn poll(&mut self) {
+        let _ = self.poll_settlement();
+    }
+
+    pub fn poll_settlement(&mut self) -> Option<Result<(), ()>> {
+        let mut settlement = None;
         loop {
             match self.replies.try_recv() {
-                Ok(reply) => self.admit(reply),
+                Ok(reply) => {
+                    settlement = Some(if self.admit(reply) { Ok(()) } else { Err(()) });
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
+                    if self.pending {
+                        settlement = Some(Err(()));
+                    }
                     self.pending = false;
                     self.notice = "Daimon worker unavailable".into();
                     break;
                 }
             }
         }
+        settlement
+    }
+
+    pub const fn request_pending(&self) -> bool {
+        self.pending
     }
 
     pub fn update(&mut self, input: Input, focused: bool) -> Lifecycle {
@@ -516,7 +689,7 @@ impl Component {
         }
     }
 
-    fn admit(&mut self, WorkerReply(reply): WorkerReply) {
+    fn admit(&mut self, WorkerReply(reply): WorkerReply) -> bool {
         self.pending = false;
         match reply {
             Ok(ReplyV1::Accepted(OutcomeV1::Presence { entries, truncated })) => {
@@ -528,12 +701,20 @@ impl Component {
                 } else {
                     format!("{} agent(s)", self.entries.len())
                 };
+                true
             }
             Ok(ReplyV1::Refused(refusal)) => {
                 self.notice = format!("Daimon refused: {refusal:?}");
+                false
             }
-            Ok(ReplyV1::Accepted(_)) => self.notice = "Invalid Daimon reply".into(),
-            Err(()) => self.notice = "Daimon unavailable; outcome not inferred".into(),
+            Ok(ReplyV1::Accepted(_)) => {
+                self.notice = "Invalid Daimon reply".into();
+                false
+            }
+            Err(()) => {
+                self.notice = "Daimon unavailable; outcome not inferred".into();
+                false
+            }
         }
     }
 }
