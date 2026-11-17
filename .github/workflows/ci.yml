@@ -43,7 +43,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: gantbd/daimon
-          ref: 325e662a6a945cf8a064b9812ebbbdac02be4130
+          ref: 8d4238ce6433b250c2f081f7c9508905778994c0
           path: daimon
           persist-credentials: false
       - name: Install pinned Rust toolchain
