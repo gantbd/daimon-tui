@@ -38,6 +38,8 @@ struct Port {
     connected: bool,
     session: Option<AgentSessionIdV1>,
     turn: Option<AgentTurnIdV1>,
+    revision: u64,
+    prompt_count: u32,
     marker: PathBuf,
 }
 
@@ -81,6 +83,10 @@ impl AgentServicePort for Port {
                 AgentReplyV1::Accepted(AgentOutcomeV1::Session(self.view()))
             }
             AgentCommandV1::Inspect { session } if self.session == Some(session) => {
+                // Model the local agent completing its accepted turn between
+                // observations. Production readiness remains owner-derived;
+                // Pantheon never clears or invents the active turn itself.
+                self.turn = None;
                 AgentReplyV1::Accepted(AgentOutcomeV1::Session(self.view()))
             }
             AgentCommandV1::Events {
@@ -97,16 +103,28 @@ impl AgentServicePort for Port {
             AgentCommandV1::Prompt { request, now }
                 if self.session == Some(request.session)
                     && self.turn.is_none()
-                    && request.expected_revision == 1
+                    && request.expected_revision == self.revision
                     && request.execution.task_attempt.task_key == [0x14; 16]
                     && now > 0 =>
             {
                 let prompt = std::str::from_utf8(&request.prompt)
                     .expect("work-item prompt is bounded UTF-8 text");
-                assert!(prompt.contains("product-owner collaboration lens"));
-                assert!(prompt.contains("not a human identity"));
-                assert!(prompt.ends_with("Work item:\nlocal-agent-task"));
+                match self.prompt_count {
+                    0 => {
+                        assert!(prompt.contains("product-owner collaboration lens"));
+                        assert!(prompt.contains("not a human identity"));
+                        assert!(prompt.ends_with("Work item:\nlocal-agent-task"));
+                    }
+                    1 => {
+                        assert!(prompt.contains("ordinary room chatter is not a prompt"));
+                        assert!(prompt.contains("Please inspect the bounded acceptance evidence"));
+                        assert!(prompt.contains("Configured addressee: local-agent"));
+                    }
+                    count => panic!("unexpected journey prompt count: {count}"),
+                }
                 self.turn = Some(request.turn);
+                self.revision += 1;
+                self.prompt_count += 1;
                 self.append("prompted");
                 AgentReplyV1::Accepted(AgentOutcomeV1::Session(self.view()))
             }
@@ -129,7 +147,7 @@ impl Port {
     fn view(&self) -> AgentSessionViewV1 {
         AgentSessionViewV1 {
             session: self.session.expect("session opened before projection"),
-            revision: if self.turn.is_some() { 2 } else { 1 },
+            revision: self.revision,
             phase: if self.turn.is_some() {
                 AgentSessionPhaseV1::TurnActive
             } else {
@@ -166,6 +184,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             connected: false,
             session: None,
             turn: None,
+            revision: 1,
+            prompt_count: 0,
             marker,
         },
         Authentication,
