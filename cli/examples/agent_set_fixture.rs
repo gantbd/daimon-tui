@@ -52,8 +52,18 @@ enum Mode {
     Prompt,
     PromptLens,
     PromptLensTask,
+    SharedContext,
     Permission,
     Reattach,
+}
+
+impl Mode {
+    const fn accepts_prompt(self) -> bool {
+        matches!(
+            self,
+            Self::Prompt | Self::PromptLens | Self::PromptLensTask | Self::SharedContext
+        )
+    }
 }
 
 impl AgentSessionPort for Port {
@@ -157,11 +167,7 @@ impl AgentServicePort for Port {
                 )
             }
             AgentCommandV1::Prompt { request, .. }
-                if request.expected_revision == 12
-                    && matches!(
-                        self.mode,
-                        Mode::Prompt | Mode::PromptLens | Mode::PromptLensTask
-                    ) =>
+                if request.expected_revision == 12 && self.mode.accepts_prompt() =>
             {
                 assert_task_attempt(&request.execution.task_attempt);
                 self.session_index(request.session).map_or_else(
@@ -171,23 +177,7 @@ impl AgentServicePort for Port {
                             !self.completed[index],
                             "session prompt attempted more than once"
                         );
-                        if matches!(self.mode, Mode::PromptLens | Mode::PromptLensTask) {
-                            let prompt = std::str::from_utf8(&request.prompt)
-                                .expect("lens prompt is bounded UTF-8 text");
-                            assert!(prompt.contains("product-owner collaboration lens"));
-                            assert!(prompt.contains("not a human identity"));
-                            assert!(
-                                prompt.contains("not a human identity")
-                                    && prompt.contains("authority")
-                            );
-                            if self.mode == Mode::PromptLensTask {
-                                assert!(prompt.ends_with("Work item:\nlocal-agent-task"));
-                            } else {
-                                assert!(prompt.ends_with("Work item:\ninspect\nreport drift"));
-                            }
-                        } else {
-                            assert_eq!(request.prompt, b"inspect\nreport drift");
-                        }
+                        self.assert_prompt(index, &request.prompt);
                         self.completed[index] = true;
                         self.turns[index] = Some(request.turn);
                         let mut marker = OpenOptions::new()
@@ -274,6 +264,35 @@ fn assert_task_attempt(attempt: &daimon_protocol::TaskAttemptRefV1) {
 }
 
 impl Port {
+    fn assert_prompt(&self, index: usize, bytes: &[u8]) {
+        if self.mode == Mode::SharedContext {
+            let prompt =
+                std::str::from_utf8(bytes).expect("shared-context prompt is bounded UTF-8 text");
+            if index == 2 {
+                assert!(prompt.contains("product-owner collaboration lens"));
+                assert!(prompt.contains("not a human identity"));
+                assert!(prompt.ends_with("Work item:\nrecurring-incident"));
+            } else {
+                assert!(prompt.contains("selected message as user-provided collaboration context"));
+                assert!(prompt.contains("Configured addressees: sre-agent, project-agent"));
+                assert!(prompt.contains("Do we have the right ensemble?"));
+                assert!(prompt.contains("does not authorize disposition"));
+            }
+        } else if matches!(self.mode, Mode::PromptLens | Mode::PromptLensTask) {
+            let prompt = std::str::from_utf8(bytes).expect("lens prompt is bounded UTF-8 text");
+            assert!(prompt.contains("product-owner collaboration lens"));
+            assert!(prompt.contains("not a human identity"));
+            assert!(prompt.contains("not a human identity") && prompt.contains("authority"));
+            if self.mode == Mode::PromptLensTask {
+                assert!(prompt.ends_with("Work item:\nlocal-agent-task"));
+            } else {
+                assert!(prompt.ends_with("Work item:\ninspect\nreport drift"));
+            }
+        } else {
+            assert_eq!(bytes, b"inspect\nreport drift");
+        }
+    }
+
     fn session_index(&self, session: AgentSessionIdV1) -> Option<usize> {
         (0..3).find(|index| session == AgentSessionIdV1::new([*index as u8 + 7; 16]))
     }
@@ -350,11 +369,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(value) if value == "prompt" => Mode::Prompt,
         Some(value) if value == "prompt-lens" => Mode::PromptLens,
         Some(value) if value == "prompt-lens-task" => Mode::PromptLensTask,
+        Some(value) if value == "shared-context" => Mode::SharedContext,
         Some(value) if value == "permission" => Mode::Permission,
         Some(value) if value == "reattach" => Mode::Reattach,
         Some(_) => {
             return Err(
-                "mode must be close, close-unknown, prompt, prompt-lens, prompt-lens-task, permission, or reattach"
+                "mode must be close, close-unknown, prompt, prompt-lens, prompt-lens-task, shared-context, permission, or reattach"
                     .into(),
             );
         }
@@ -379,7 +399,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     // One startup probe, one 3-session refresh, one connection per child, and
     // one post-receipt refresh that proves the accepted owner projections.
-    let connections = if mode == Mode::CloseUnknown { 5 } else { 6 };
+    let connections = if mode == Mode::CloseUnknown {
+        5
+    } else if mode == Mode::SharedContext {
+        7
+    } else {
+        6
+    };
     for _ in 0..connections {
         daemon
             .serve_next()

@@ -423,6 +423,16 @@ impl AgentSetComponent {
             .and_then(|entry| entry.observation.as_ref())
     }
 
+    /// Returns the current owner observation for one exact configured session.
+    /// Composition hosts can bind an external participant identity to a Daimon
+    /// session without mutating the operator's sparse presentation selection.
+    pub fn observation(&self, session: AgentSessionIdV1) -> Option<&AgentObservation> {
+        self.entries
+            .iter()
+            .find(|entry| entry.session == session)
+            .and_then(|entry| entry.observation.as_ref())
+    }
+
     /// Sparse selection with one-item fallback keeps one and N on one path.
     pub fn selected_observations(&self) -> Vec<&AgentObservation> {
         let selected = self

@@ -339,6 +339,19 @@ fn configured_session_set_supports_sparse_n_selection() {
     assert_eq!(selected.len(), 2);
     assert_eq!(selected[0].view.session, AgentSessionIdV1::new([1; 16]));
     assert_eq!(selected[1].view.session, AgentSessionIdV1::new([3; 16]));
+    assert_eq!(
+        component
+            .observation(AgentSessionIdV1::new([2; 16]))
+            .unwrap()
+            .view
+            .session,
+        AgentSessionIdV1::new([2; 16])
+    );
+    assert!(
+        component
+            .observation(AgentSessionIdV1::new([9; 16]))
+            .is_none()
+    );
 
     let mut terminal = Terminal::new(TestBackend::new(140, 16)).unwrap();
     terminal
