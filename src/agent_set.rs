@@ -82,7 +82,7 @@ impl AgentSetComponent {
                 }
             }
         });
-        Ok(Self::from_channels(request_tx, reply_rx, sessions))
+        Ok(Self::from_channels(request_tx, reply_rx, sessions, true))
     }
 
     /// Connects once per bounded refresh and drops that connection before the
@@ -125,7 +125,48 @@ impl AgentSetComponent {
                 }
             }
         });
-        Ok(Self::from_channels(request_tx, reply_rx, sessions))
+        Ok(Self::from_channels(request_tx, reply_rx, sessions, true))
+    }
+
+    /// Creates an attached presentation with no preselected sessions. The
+    /// connector remains dormant until `admit_session` receives an exact
+    /// owner-created identity; no owner-side discovery or synthetic session is
+    /// performed.
+    pub fn new_empty_with_connector<P, F, E>(connector: F) -> Self
+    where
+        P: AgentServicePort + Send + 'static,
+        P::Error: Send + 'static,
+        F: Fn() -> Result<(SessionHandleV1, P), E> + Send + 'static,
+        E: Send + 'static,
+    {
+        let (request_tx, request_rx) = sync_channel::<Vec<AgentSessionIdV1>>(1);
+        let (reply_tx, reply_rx) = sync_channel(1);
+        std::thread::spawn(move || {
+            while let Ok(requested) = request_rx.recv() {
+                let replies = match connector() {
+                    Ok((service_session, port)) => {
+                        let mut client = AgentReadOnlyClient::new(service_session, port);
+                        requested
+                            .into_iter()
+                            .map(|session| (session, observe_agent(&mut client, session)))
+                            .collect()
+                    }
+                    Err(_) => requested
+                        .into_iter()
+                        .map(|session| {
+                            (
+                                session,
+                                Err("Daimon session-set connection unavailable".into()),
+                            )
+                        })
+                        .collect(),
+                };
+                if reply_tx.send(SetWorkerReply(replies)).is_err() {
+                    break;
+                }
+            }
+        });
+        Self::from_channels(request_tx, reply_rx, Vec::new(), false)
     }
 
     fn validate(sessions: &[AgentSessionIdV1]) -> Result<(), &'static str> {
@@ -149,6 +190,7 @@ impl AgentSetComponent {
         refresh: SyncSender<Vec<AgentSessionIdV1>>,
         replies: Receiver<SetWorkerReply>,
         sessions: Vec<AgentSessionIdV1>,
+        queue_initial: bool,
     ) -> Self {
         let mut component = Self {
             refresh,
@@ -168,7 +210,12 @@ impl AgentSetComponent {
             pending: false,
             notice: "Daimon configured session set ready; refresh queued".into(),
         };
-        component.offer_all();
+        if queue_initial {
+            component.offer_all();
+        } else {
+            component.notice =
+                "Daimon session workset empty; open or admit one exact owner session".into();
+        }
         component
     }
 
@@ -242,6 +289,11 @@ impl AgentSetComponent {
         }
         match input {
             AgentSetInput::Close => return Lifecycle::CloseRequested,
+            _ if self.entries.is_empty() => {
+                self.notice =
+                    "Daimon session workset empty; open or admit one exact owner session".into();
+                return Lifecycle::Running;
+            }
             AgentSetInput::PreviousSession => self.current = self.current.saturating_sub(1),
             AgentSetInput::NextSession => {
                 self.current = (self.current + 1).min(self.entries.len() - 1);
@@ -318,19 +370,25 @@ impl AgentSetComponent {
             List::new(items).block(Block::default().borders(Borders::ALL).title(title)),
             sessions,
         );
-        let entry = &self.entries[self.current];
         let [body, footer] =
             Layout::vertical([Constraint::Min(1), Constraint::Length(3)]).areas(detail);
-        let lines = entry.observation.as_ref().map_or_else(
-            || {
-                vec![Line::from(
-                    entry
-                        .error
-                        .as_deref()
-                        .unwrap_or("No current session observation"),
-                )]
+        let lines = self.entries.get(self.current).map_or_else(
+            || vec![Line::from("No exact Daimon session admitted")],
+            |entry| {
+                entry.observation.as_ref().map_or_else(
+                    || {
+                        vec![Line::from(
+                            entry
+                                .error
+                                .as_deref()
+                                .unwrap_or("No current session observation"),
+                        )]
+                    },
+                    |observation| {
+                        agent_lines_with_filter(observation, entry.event, self.event_filter)
+                    },
+                )
             },
-            |observation| agent_lines_with_filter(observation, entry.event, self.event_filter),
         );
         frame.render_widget(
             Paragraph::new(lines).block(
@@ -360,7 +418,9 @@ impl AgentSetComponent {
     }
 
     pub fn current_observation(&self) -> Option<&AgentObservation> {
-        self.entries[self.current].observation.as_ref()
+        self.entries
+            .get(self.current)
+            .and_then(|entry| entry.observation.as_ref())
     }
 
     /// Sparse selection with one-item fallback keeps one and N on one path.
@@ -379,6 +439,9 @@ impl AgentSetComponent {
     }
 
     pub fn selected_count(&self) -> usize {
+        if self.entries.is_empty() {
+            return 0;
+        }
         let count = self.entries.iter().filter(|entry| entry.selected).count();
         if count == 0 { 1 } else { count }
     }
@@ -454,6 +517,35 @@ impl AgentSetComponent {
         }
         self.offer(sessions.to_vec());
         self.pending
+    }
+
+    /// Admits one exact owner-created session into this bounded presentation
+    /// workset and immediately queues its first observation. This changes only
+    /// client-side selection; it does not create, authorize, or infer a Daimon
+    /// session. A pending refresh or full/duplicate set is refused atomically.
+    pub fn admit_session(&mut self, session: AgentSessionIdV1) -> Result<(), &'static str> {
+        if self.pending {
+            return Err("Daimon session-set refresh already pending");
+        }
+        if self.entries.iter().any(|entry| entry.session == session) {
+            return Err("Daimon session is already in the configured workset");
+        }
+        if self.entries.len() >= Self::MAX_SESSIONS {
+            return Err("Daimon session set exceeds the 16-session bound");
+        }
+        for entry in &mut self.entries {
+            entry.selected = false;
+        }
+        self.entries.push(Entry {
+            session,
+            observation: None,
+            event: 0,
+            selected: true,
+            error: None,
+        });
+        self.current = self.entries.len() - 1;
+        self.offer(vec![session]);
+        Ok(())
     }
 
     fn offer_all(&mut self) {

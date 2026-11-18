@@ -38,6 +38,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if mode == "agent-close" {
         return agent_close(args);
     }
+    if mode == "agent-open" {
+        return agent_open(args);
+    }
     if mode == "agent-reattach" {
         return agent_reattach(args);
     }
@@ -574,6 +577,108 @@ fn agent_close_failure(
 }
 
 #[cfg(unix)]
+fn agent_open(
+    mut args: impl Iterator<Item = std::ffi::OsString>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use daimon_agent_command::{OpenError, parse_open_document};
+    use daimon_client::unix::AgentClientErrorV1;
+    use daimon_protocol::agent::AgentOutcomeV1;
+    use std::{path::PathBuf, time::Duration};
+
+    let socket = args.next().map(PathBuf::from).ok_or_else(usage)?;
+    let document_path = args.next().map(PathBuf::from).ok_or_else(usage)?;
+    let confirmation = args
+        .next()
+        .and_then(|value| value.into_string().ok())
+        .ok_or_else(usage)?;
+    if args.next().is_some() {
+        return Err(usage().into());
+    }
+    let document = read_bounded(&document_path, 64 * 1024)?;
+    let request = parse_open_document(&document)
+        .map_err(|error| format!("Daimon session-open document refused: {error:?}"))?;
+    let (service_session, port) = match daimon_client::unix::connect_agent(
+        socket,
+        daimon_wire::LimitsV1::default(),
+        daimon_wire::agent::AgentWireLimitsV1::default(),
+        Duration::from_secs(5),
+    ) {
+        Ok(connection) => connection,
+        Err(error) => return agent_open_failure("not_sent", &format!("{error:?}"), None),
+    };
+    match daimon_agent_command::open(service_session, port, request, &confirmation) {
+        Ok(AgentOutcomeV1::Session(view)) => {
+            let session = view
+                .session
+                .into_bytes()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "version": 1,
+                    "peer": "daimon",
+                    "capability": daimon_agent_command::OPEN_CAPABILITY,
+                    "complete": true,
+                    "status": "opened",
+                    "session": session,
+                    "revision": view.revision,
+                    "phase": format!("{:?}", view.phase),
+                    "last_event_cursor": view.last_event_cursor,
+                }))?
+            );
+            Ok(())
+        }
+        Ok(AgentOutcomeV1::OutcomeUnknown { .. }) => agent_open_failure(
+            "outcome_unknown",
+            "Daimon retained an indeterminate session-open outcome; inspect the exact session before any further action",
+            None,
+        ),
+        Ok(AgentOutcomeV1::Events(_)) => agent_open_failure(
+            "invalid_reply",
+            "unexpected Daimon session-open reply",
+            None,
+        ),
+        Err(OpenError::ConfirmationMismatch { required }) => agent_open_failure(
+            "confirmation_refused",
+            "exact Daimon session-open confirmation required",
+            Some(&required),
+        ),
+        Err(OpenError::MutationTransport(AgentClientErrorV1::OutcomeUnknown(error))) => {
+            agent_open_failure("outcome_unknown", &format!("{error:?}"), None)
+        }
+        Err(OpenError::MutationTransport(AgentClientErrorV1::NotSent(error))) => {
+            agent_open_failure("not_sent", &format!("{error:?}"), None)
+        }
+        Err(OpenError::MutationRefused(refusal)) => {
+            agent_open_failure("refused", &format!("{refusal:?}"), None)
+        }
+        Err(error) => agent_open_failure("unavailable", &format!("{error:?}"), None),
+    }
+}
+
+#[cfg(unix)]
+fn agent_open_failure(
+    status: &str,
+    message: &str,
+    required_confirmation: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "version": 1,
+            "peer": "daimon",
+            "capability": daimon_agent_command::OPEN_CAPABILITY,
+            "complete": false,
+            "status": status,
+            "required_confirmation": required_confirmation,
+        }))?
+    );
+    Err(std::io::Error::other(message).into())
+}
+
+#[cfg(unix)]
 fn agent_reattach(
     mut args: impl Iterator<Item = std::ffi::OsString>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -1078,7 +1183,7 @@ fn headless_failure_for(
 }
 
 fn usage() -> &'static str {
-    "usage: daimon-tui capabilities | daimon-tui <interactive|headless> SOCKET | daimon-tui <agent-inspect|agent-interactive> SOCKET AGENT_SESSION_HEX\ndaimon-tui agent-advance SOCKET AGENT_SESSION_HEX TURN_HEX EXPECTED_REVISION IDEMPOTENCY_KEY_HEX NOW 'ADVANCE DAIMON SESSION AGENT_SESSION_HEX TURN TURN_HEX REVISION EXPECTED_REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'\ndaimon-tui agent-cancel SOCKET AGENT_SESSION_HEX TURN_HEX EXPECTED_REVISION IDEMPOTENCY_KEY_HEX NOW 'CANCEL DAIMON SESSION AGENT_SESSION_HEX TURN TURN_HEX REVISION EXPECTED_REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'\ndaimon-tui agent-close SOCKET AGENT_SESSION_HEX EXPECTED_REVISION IDEMPOTENCY_KEY_HEX NOW 'CLOSE DAIMON SESSION AGENT_SESSION_HEX REVISION EXPECTED_REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'\ndaimon-tui agent-reattach SOCKET REQUEST_JSON 'REATTACH DAIMON SESSION …'\ndaimon-tui agent-prompt SOCKET REQUEST_JSON PROMPT_FILE 'PROMPT DAIMON SESSION …'\ndaimon-tui agent-permission SOCKET REQUEST_JSON 'DECIDE DAIMON PERMISSION …'\nheadless commands emit bounded versioned observations without constructing TUI state; agent mutations observe exact current state and attempt once without retry"
+    "usage: daimon-tui capabilities | daimon-tui <interactive|headless> SOCKET | daimon-tui <agent-inspect|agent-interactive> SOCKET AGENT_SESSION_HEX\ndaimon-tui agent-open SOCKET REQUEST_JSON 'OPEN DAIMON SESSION …'\ndaimon-tui agent-advance SOCKET AGENT_SESSION_HEX TURN_HEX EXPECTED_REVISION IDEMPOTENCY_KEY_HEX NOW 'ADVANCE DAIMON SESSION AGENT_SESSION_HEX TURN TURN_HEX REVISION EXPECTED_REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'\ndaimon-tui agent-cancel SOCKET AGENT_SESSION_HEX TURN_HEX EXPECTED_REVISION IDEMPOTENCY_KEY_HEX NOW 'CANCEL DAIMON SESSION AGENT_SESSION_HEX TURN TURN_HEX REVISION EXPECTED_REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'\ndaimon-tui agent-close SOCKET AGENT_SESSION_HEX EXPECTED_REVISION IDEMPOTENCY_KEY_HEX NOW 'CLOSE DAIMON SESSION AGENT_SESSION_HEX REVISION EXPECTED_REVISION KEY IDEMPOTENCY_KEY_HEX AT NOW'\ndaimon-tui agent-reattach SOCKET REQUEST_JSON 'REATTACH DAIMON SESSION …'\ndaimon-tui agent-prompt SOCKET REQUEST_JSON PROMPT_FILE 'PROMPT DAIMON SESSION …'\ndaimon-tui agent-permission SOCKET REQUEST_JSON 'DECIDE DAIMON PERMISSION …'\nheadless commands emit bounded versioned observations without constructing TUI state; agent mutations observe exact current state and attempt once without retry"
 }
 
 #[cfg(not(unix))]

@@ -380,6 +380,67 @@ fn configured_session_set_supports_sparse_n_selection() {
 }
 
 #[test]
+fn owner_created_session_can_enter_the_bounded_presentation_workset() {
+    let first = AgentSessionIdV1::new([1; 16]);
+    let opened = AgentSessionIdV1::new([4; 16]);
+    let mut component =
+        daimon_tui::AgentSetComponent::new(SessionHandleV1(5), SetPort, vec![first]).unwrap();
+    for _ in 0..100 {
+        component.poll();
+        if !component.request_pending() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    component.admit_session(opened).unwrap();
+    assert!(component.request_pending());
+    assert_eq!(component.selected_count(), 1);
+    for _ in 0..100 {
+        component.poll();
+        if component
+            .current_observation()
+            .is_some_and(|observation| observation.view.session == opened)
+        {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(
+        component.current_observation().unwrap().view.session,
+        opened
+    );
+    assert!(component.admit_session(opened).is_err());
+}
+
+#[test]
+fn empty_attached_workset_stays_dormant_until_owner_session_admission() {
+    let connections = Arc::new(AtomicUsize::new(0));
+    let observed_connections = Arc::clone(&connections);
+    let mut component = daimon_tui::AgentSetComponent::new_empty_with_connector(move || {
+        observed_connections.fetch_add(1, Ordering::SeqCst);
+        Ok::<_, ()>((SessionHandleV1(5), SetPort))
+    });
+    assert!(!component.request_pending());
+    assert_eq!(connections.load(Ordering::SeqCst), 0);
+    assert!(component.current_observation().is_none());
+
+    let opened = AgentSessionIdV1::new([4; 16]);
+    component.admit_session(opened).unwrap();
+    for _ in 0..100 {
+        component.poll();
+        if !component.request_pending() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(connections.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        component.current_observation().unwrap().view.session,
+        opened
+    );
+}
+
+#[test]
 fn sixteen_session_filter_and_render_path_meets_local_budget() {
     let sessions = (1_u8..=16)
         .map(|value| AgentSessionIdV1::new([value; 16]))
