@@ -159,6 +159,7 @@ impl AgentServicePort for Port {
                 if request.expected_revision == 12
                     && matches!(self.mode, Mode::Prompt | Mode::PromptLens) =>
             {
+                assert_task_attempt(&request.execution.task_attempt);
                 self.session_index(request.session).map_or_else(
                     || AgentReplyV1::Refused(AgentRefusalV1::UnknownAgentSession),
                     |index| {
@@ -195,59 +196,73 @@ impl AgentServicePort for Port {
             AgentCommandV1::DecidePermission {
                 session,
                 expected_revision: 12,
+                execution,
                 decision,
                 ..
-            } if self.mode == Mode::Permission => self.session_index(session).map_or_else(
-                || AgentReplyV1::Refused(AgentRefusalV1::UnknownAgentSession),
-                |index| {
-                    assert!(
-                        !self.completed[index],
-                        "permission attempted more than once"
-                    );
-                    let challenge = self.challenge(index);
-                    assert_eq!(decision.request, challenge.request);
-                    let option = challenge
-                        .options
-                        .iter()
-                        .find(|option| option.id == decision.option)
-                        .expect("owner-published permission option");
-                    self.completed[index] = true;
-                    let mut marker = OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&self.marker)
-                        .expect("append permission receipt");
-                    writeln!(marker, "session {} permission {:?}", index + 1, option.kind)
-                        .expect("write permission receipt");
-                    AgentReplyV1::Accepted(AgentOutcomeV1::Session(self.view(index)))
-                },
-            ),
+            } if self.mode == Mode::Permission => {
+                assert_task_attempt(&execution.task_attempt);
+                self.session_index(session).map_or_else(
+                    || AgentReplyV1::Refused(AgentRefusalV1::UnknownAgentSession),
+                    |index| {
+                        assert!(
+                            !self.completed[index],
+                            "permission attempted more than once"
+                        );
+                        let challenge = self.challenge(index);
+                        assert_eq!(decision.request, challenge.request);
+                        let option = challenge
+                            .options
+                            .iter()
+                            .find(|option| option.id == decision.option)
+                            .expect("owner-published permission option");
+                        self.completed[index] = true;
+                        let mut marker = OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&self.marker)
+                            .expect("append permission receipt");
+                        writeln!(marker, "session {} permission {:?}", index + 1, option.kind)
+                            .expect("write permission receipt");
+                        AgentReplyV1::Accepted(AgentOutcomeV1::Session(self.view(index)))
+                    },
+                )
+            }
             AgentCommandV1::Reattach {
                 session,
                 expected_revision: 12,
+                execution,
                 ..
-            } if self.mode == Mode::Reattach => self.session_index(session).map_or_else(
-                || AgentReplyV1::Refused(AgentRefusalV1::UnknownAgentSession),
-                |index| {
-                    assert!(
-                        !self.completed[index],
-                        "session reattach attempted more than once"
-                    );
-                    self.completed[index] = true;
-                    let mut marker = OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&self.marker)
-                        .expect("append reattach receipt");
-                    writeln!(marker, "session {} reattached", index + 1)
-                        .expect("write reattach receipt");
-                    AgentReplyV1::Accepted(AgentOutcomeV1::Session(self.view(index)))
-                },
-            ),
+            } if self.mode == Mode::Reattach => {
+                assert_task_attempt(&execution.task_attempt);
+                self.session_index(session).map_or_else(
+                    || AgentReplyV1::Refused(AgentRefusalV1::UnknownAgentSession),
+                    |index| {
+                        assert!(
+                            !self.completed[index],
+                            "session reattach attempted more than once"
+                        );
+                        self.completed[index] = true;
+                        let mut marker = OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&self.marker)
+                            .expect("append reattach receipt");
+                        writeln!(marker, "session {} reattached", index + 1)
+                            .expect("write reattach receipt");
+                        AgentReplyV1::Accepted(AgentOutcomeV1::Session(self.view(index)))
+                    },
+                )
+            }
             other => panic!("unexpected session-set command: {other:?}"),
         };
         Ok(reply)
     }
+}
+
+fn assert_task_attempt(attempt: &daimon_protocol::TaskAttemptRefV1) {
+    assert_eq!(attempt.task_key, [0x14; 16]);
+    assert_eq!(attempt.task_incarnation, 1);
+    assert_eq!(attempt.attempt_number, 1);
 }
 
 impl Port {
