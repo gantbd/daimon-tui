@@ -173,6 +173,7 @@ fn view(phase: AgentSessionPhaseV1, revision: u64) -> AgentSessionViewV1 {
         profile_document_digest: ContentDigestV1::new([3; 32]),
         active_turn: None,
         last_event_cursor: None,
+        last_context: None,
         capabilities: AgentCapabilitiesV1 {
             load_session: true,
             resume_session: true,

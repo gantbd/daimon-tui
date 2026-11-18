@@ -9,11 +9,12 @@ use std::{
 
 use daimon_client::{AgentServicePort, ServicePort};
 use daimon_protocol::{
-    AgentSessionIdV1, CommandV1, ContentDigestV1, OutcomeV1, PresenceEntryV1, ReplyV1,
-    SessionHandleV1,
+    AgentSessionIdV1, CommandV1, ContentDigestV1, ContextKindV1, ContextReferenceIdV1,
+    ExecutionIdV1, OutcomeV1, PresenceEntryV1, ReplyV1, SessionHandleV1,
     agent::{
-        AgentCapabilitiesV1, AgentCommandV1, AgentEventPageV1, AgentEventRecordV1, AgentEventV1,
-        AgentOutcomeV1, AgentReplyV1, AgentSessionPhaseV1, AgentSessionViewV1,
+        AgentCapabilitiesV1, AgentCommandV1, AgentContextManifestEntryV1, AgentContextReceiptV1,
+        AgentEventPageV1, AgentEventRecordV1, AgentEventV1, AgentOutcomeV1, AgentReplyV1,
+        AgentSessionPhaseV1, AgentSessionViewV1,
     },
 };
 use ratatui::{Terminal, backend::TestBackend};
@@ -72,6 +73,17 @@ impl AgentServicePort for AgentPort {
                     profile_document_digest: ContentDigestV1::new([3; 32]),
                     active_turn: None,
                     last_event_cursor: Some(2),
+                    last_context: Some(AgentContextReceiptV1 {
+                        execution: ExecutionIdV1::new([4; 16]),
+                        manifest_digest: ContentDigestV1::new([5; 32]),
+                        entries: vec![AgentContextManifestEntryV1 {
+                            reference: ContextReferenceIdV1::new([6; 16]),
+                            kind: ContextKindV1::VellumDocument,
+                            source_digest: ContentDigestV1::new([8; 32]),
+                            content_bytes: 21,
+                            grounding: None,
+                        }],
+                    }),
                     capabilities: AgentCapabilitiesV1 {
                         load_session: true,
                         resume_session: true,
@@ -130,6 +142,7 @@ impl AgentServicePort for SetPort {
                 profile_document_digest: ContentDigestV1::new([3; 32]),
                 active_turn: None,
                 last_event_cursor: Some(1),
+                last_context: None,
                 capabilities: AgentCapabilitiesV1 {
                     load_session: true,
                     resume_session: true,
@@ -180,6 +193,7 @@ impl AgentServicePort for TailPort {
                     profile_document_digest: ContentDigestV1::new([3; 32]),
                     active_turn: None,
                     last_event_cursor: Some(100),
+                    last_context: None,
                     capabilities: AgentCapabilitiesV1 {
                         load_session: true,
                         resume_session: true,
@@ -266,7 +280,7 @@ fn agent_component_renders_exact_configured_session_evidence() {
     let mut component = daimon_tui::AgentComponent::new(SessionHandleV1(5), AgentPort(7), session);
     for _ in 0..100 {
         component.poll();
-        let mut terminal = Terminal::new(TestBackend::new(140, 14)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(140, 16)).unwrap();
         terminal
             .draw(|frame| component.draw_in(frame, frame.area(), true))
             .unwrap();
@@ -284,6 +298,9 @@ fn agent_component_renders_exact_configured_session_evidence() {
             );
             assert!(rendered.contains("assistant hello\\nworld"));
             assert!(rendered.contains("usage input=11 output=13"));
+            assert!(rendered.contains("last context: execution 04040404"));
+            assert!(rendered.contains("VellumDocument"));
+            assert!(rendered.contains("21 bytes"));
             assert!(!rendered.contains("070707"));
             return;
         }

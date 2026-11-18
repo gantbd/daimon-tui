@@ -295,6 +295,7 @@ impl Port {
                 self.turns[index]
             },
             last_event_cursor: (self.mode == Mode::Permission).then_some(5),
+            last_context: None,
             capabilities: AgentCapabilitiesV1 {
                 load_session: true,
                 resume_session: true,

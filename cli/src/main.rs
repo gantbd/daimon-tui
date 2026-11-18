@@ -169,6 +169,21 @@ fn run_agent_headless(
                     "active_turn": view.active_turn.map(|_| "present"),
                     "last_event_cursor": view.last_event_cursor,
                     "profile_document_digest": hex(&view.profile_document_digest.into_bytes()),
+                    "last_context": view.last_context.as_ref().map(|receipt| serde_json::json!({
+                        "execution": hex(&receipt.execution.into_bytes()),
+                        "manifest_digest": hex(&receipt.manifest_digest.into_bytes()),
+                        "entries": receipt.entries.iter().map(|entry| serde_json::json!({
+                            "reference": hex(&entry.reference.into_bytes()),
+                            "kind": format!("{:?}", entry.kind),
+                            "source_digest": hex(&entry.source_digest.into_bytes()),
+                            "content_bytes": entry.content_bytes,
+                            "grounding": entry.grounding.map(|grounding| serde_json::json!({
+                                "depth": format!("{:?}", grounding.depth),
+                                "grounding_digest": hex(&grounding.grounding_digest.into_bytes()),
+                                "surface_digest": hex(&grounding.surface_digest.into_bytes()),
+                            })),
+                        })).collect::<Vec<_>>(),
+                    })),
                     "capabilities": {
                         "load_session": capabilities.load_session,
                         "resume_session": capabilities.resume_session,

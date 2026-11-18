@@ -395,6 +395,17 @@ pub(crate) fn agent_lines_with_filter(
             "profile document digest: {}",
             hex(&view.profile_document_digest.into_bytes())
         )),
+        Line::from(view.last_context.as_ref().map_or_else(
+            || "last context: not yet admitted".into(),
+            |receipt| {
+                format!(
+                    "last context: execution {} · manifest {} · {} item(s)",
+                    hex(&receipt.execution.into_bytes()),
+                    hex(&receipt.manifest_digest.into_bytes()),
+                    receipt.entries.len()
+                )
+            },
+        )),
         Line::from(format!(
             "events: {} visible / {} observed{} · filter {}",
             visible,
@@ -407,6 +418,22 @@ pub(crate) fn agent_lines_with_filter(
             filter.label(),
         )),
     ];
+    if let Some(receipt) = &view.last_context {
+        lines.extend(receipt.entries.iter().map(|entry| {
+            Line::from(format!(
+                "  context {} · {:?} · {} · {} bytes{}",
+                hex(&entry.reference.into_bytes()),
+                entry.kind,
+                hex(&entry.source_digest.into_bytes()),
+                entry.content_bytes,
+                if entry.grounding.is_some() {
+                    " · grounded"
+                } else {
+                    ""
+                }
+            ))
+        }));
+    }
     for (index, record) in observation
         .events
         .entries

@@ -108,6 +108,7 @@ fn view() -> AgentSessionViewV1 {
         profile_document_digest: ContentDigestV1::new([3; 32]),
         active_turn: Some(AgentTurnIdV1::new([8; 16])),
         last_event_cursor: Some(2),
+        last_context: None,
         capabilities: AgentCapabilitiesV1 {
             load_session: true,
             resume_session: true,
