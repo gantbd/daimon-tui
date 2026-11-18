@@ -51,6 +51,7 @@ enum Mode {
     CloseUnknown,
     Prompt,
     PromptLens,
+    PromptLensTask,
     Permission,
     Reattach,
 }
@@ -157,7 +158,10 @@ impl AgentServicePort for Port {
             }
             AgentCommandV1::Prompt { request, .. }
                 if request.expected_revision == 12
-                    && matches!(self.mode, Mode::Prompt | Mode::PromptLens) =>
+                    && matches!(
+                        self.mode,
+                        Mode::Prompt | Mode::PromptLens | Mode::PromptLensTask
+                    ) =>
             {
                 assert_task_attempt(&request.execution.task_attempt);
                 self.session_index(request.session).map_or_else(
@@ -167,7 +171,7 @@ impl AgentServicePort for Port {
                             !self.completed[index],
                             "session prompt attempted more than once"
                         );
-                        if self.mode == Mode::PromptLens {
+                        if matches!(self.mode, Mode::PromptLens | Mode::PromptLensTask) {
                             let prompt = std::str::from_utf8(&request.prompt)
                                 .expect("lens prompt is bounded UTF-8 text");
                             assert!(prompt.contains("product-owner collaboration lens"));
@@ -176,7 +180,11 @@ impl AgentServicePort for Port {
                                 prompt.contains("not a human identity")
                                     && prompt.contains("authority")
                             );
-                            assert!(prompt.ends_with("Work item:\ninspect\nreport drift"));
+                            if self.mode == Mode::PromptLensTask {
+                                assert!(prompt.ends_with("Work item:\nlocal-agent-task"));
+                            } else {
+                                assert!(prompt.ends_with("Work item:\ninspect\nreport drift"));
+                            }
                         } else {
                             assert_eq!(request.prompt, b"inspect\nreport drift");
                         }
@@ -341,11 +349,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(value) if value == "close-unknown" => Mode::CloseUnknown,
         Some(value) if value == "prompt" => Mode::Prompt,
         Some(value) if value == "prompt-lens" => Mode::PromptLens,
+        Some(value) if value == "prompt-lens-task" => Mode::PromptLensTask,
         Some(value) if value == "permission" => Mode::Permission,
         Some(value) if value == "reattach" => Mode::Reattach,
         Some(_) => {
             return Err(
-                "mode must be close, close-unknown, prompt, prompt-lens, permission, or reattach"
+                "mode must be close, close-unknown, prompt, prompt-lens, prompt-lens-task, permission, or reattach"
                     .into(),
             );
         }
