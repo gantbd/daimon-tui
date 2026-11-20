@@ -295,7 +295,7 @@ fn agent_advance(
             None,
             None,
         ),
-        Ok(AgentOutcomeV1::Events(_)) => agent_advance_failure(
+        Ok(AgentOutcomeV1::Events(_)) | Ok(AgentOutcomeV1::Result(_)) => agent_advance_failure(
             "invalid_reply",
             "unexpected Daimon advance reply",
             None,
@@ -399,7 +399,7 @@ fn agent_cancel(
             None,
             None,
         ),
-        Ok(AgentOutcomeV1::Events(_)) => agent_cancel_failure(
+        Ok(AgentOutcomeV1::Events(_)) | Ok(AgentOutcomeV1::Result(_)) => agent_cancel_failure(
             "invalid_reply",
             "unexpected Daimon cancellation reply",
             None,
@@ -522,7 +522,7 @@ fn agent_close(
             None,
             None,
         ),
-        Ok(AgentOutcomeV1::Events(_)) => {
+        Ok(AgentOutcomeV1::Events(_)) | Ok(AgentOutcomeV1::Result(_)) => {
             agent_close_failure("invalid_reply", "unexpected Daimon close reply", None, None)
         }
         Err(CloseError::ConfirmationMismatch { required }) => agent_close_failure(
@@ -635,7 +635,7 @@ fn agent_open(
             "Daimon retained an indeterminate session-open outcome; inspect the exact session before any further action",
             None,
         ),
-        Ok(AgentOutcomeV1::Events(_)) => agent_open_failure(
+        Ok(AgentOutcomeV1::Events(_)) | Ok(AgentOutcomeV1::Result(_)) => agent_open_failure(
             "invalid_reply",
             "unexpected Daimon session-open reply",
             None,
@@ -732,7 +732,7 @@ fn agent_reattach(
             None,
             None,
         ),
-        Ok(AgentOutcomeV1::Events(_)) => agent_reattach_failure(
+        Ok(AgentOutcomeV1::Events(_)) | Ok(AgentOutcomeV1::Result(_)) => agent_reattach_failure(
             "invalid_reply",
             "unexpected Daimon reattach reply",
             None,
@@ -877,7 +877,7 @@ fn agent_prompt(
             None,
             None,
         ),
-        Ok(AgentOutcomeV1::Events(_)) => agent_prompt_failure(
+        Ok(AgentOutcomeV1::Events(_)) | Ok(AgentOutcomeV1::Result(_)) => agent_prompt_failure(
             "invalid_reply",
             "unexpected Daimon prompt reply",
             None,
@@ -1007,7 +1007,7 @@ fn agent_permission(
             None,
             None,
         ),
-        Ok(AgentOutcomeV1::Events(_)) => agent_permission_failure(
+        Ok(AgentOutcomeV1::Events(_)) | Ok(AgentOutcomeV1::Result(_)) => agent_permission_failure(
             "invalid_reply",
             "unexpected Daimon permission reply",
             None,

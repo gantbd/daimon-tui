@@ -11,10 +11,11 @@ use daimon_local_daemon::{
     unix::{AgentDaemon, AgentSessionPort, Authenticator},
 };
 use daimon_protocol::{
-    AgentSessionIdV1, AgentTurnIdV1, ContentDigestV1, SessionHandleV1,
+    AgentSessionIdV1, AgentTurnIdV1, ContentDigestV1, ExecutionDispositionV1, SessionHandleV1,
     agent::{
-        AgentCapabilitiesV1, AgentCommandV1, AgentEventPageV1, AgentOutcomeV1, AgentRefusalV1,
-        AgentReplyV1, AgentSessionPhaseV1, AgentSessionViewV1,
+        AgentCapabilitiesV1, AgentCommandV1, AgentEventPageV1, AgentEventRecordV1, AgentEventV1,
+        AgentOutcomeV1, AgentRefusalV1, AgentReplyV1, AgentResultBindingV1, AgentSessionPhaseV1,
+        AgentSessionViewV1, AgentTurnRequestV1, AgentTurnStopReasonV1,
     },
 };
 use daimon_wire::{LimitsV1, agent::AgentWireLimitsV1};
@@ -38,6 +39,8 @@ struct Port {
     connected: bool,
     session: Option<AgentSessionIdV1>,
     turn: Option<AgentTurnIdV1>,
+    last_turn: Option<AgentTurnIdV1>,
+    last_request: Option<AgentTurnRequestV1>,
     revision: u64,
     prompt_count: u32,
     marker: PathBuf,
@@ -91,13 +94,46 @@ impl AgentServicePort for Port {
             }
             AgentCommandV1::Events {
                 session,
-                after: None,
-                limit: 64,
+                after,
+                limit,
             } if self.session == Some(session) => {
+                let entries = self
+                    .result_events()
+                    .into_iter()
+                    .filter(|record| after.is_none_or(|cursor| record.cursor > cursor))
+                    .take(usize::try_from(limit).unwrap_or(usize::MAX))
+                    .collect();
                 AgentReplyV1::Accepted(AgentOutcomeV1::Events(AgentEventPageV1 {
                     session,
-                    entries: Vec::new(),
+                    entries,
                     next_after: None,
+                }))
+            }
+            AgentCommandV1::Result { session, turn }
+                if self.session == Some(session)
+                    && self.last_request.as_ref().map(|request| request.turn) == Some(turn) =>
+            {
+                let request = self.last_request.as_ref().expect("matched retained prompt");
+                let first = u64::from(self.prompt_count.saturating_sub(1)) * 2 + 1;
+                let (_, digest) = self.result_content();
+                AgentReplyV1::Accepted(AgentOutcomeV1::Result(AgentResultBindingV1 {
+                    session,
+                    turn,
+                    execution: request.execution.execution_id,
+                    task_attempt: request.execution.task_attempt,
+                    principal: request.execution.principal,
+                    profile: request.execution.profile,
+                    operation: request.execution.idempotency_key,
+                    authority_decision: [0x21; 16],
+                    authority_expires_at: 100,
+                    prompt_digest: request.prompt_digest,
+                    context_manifest_digest: ContentDigestV1::new([0x23; 32]),
+                    event_start_cursor: first,
+                    terminal_cursor: first + 1,
+                    terminal_revision: self.revision,
+                    disposition: ExecutionDispositionV1::Completed,
+                    stop_reason: AgentTurnStopReasonV1::EndTurn,
+                    output_digest: Some(ContentDigestV1::new(digest)),
                 }))
             }
             AgentCommandV1::Prompt { request, now }
@@ -123,6 +159,8 @@ impl AgentServicePort for Port {
                     count => panic!("unexpected journey prompt count: {count}"),
                 }
                 self.turn = Some(request.turn);
+                self.last_turn = Some(request.turn);
+                self.last_request = Some(request.clone());
                 self.revision += 1;
                 self.prompt_count += 1;
                 self.append("prompted");
@@ -135,6 +173,53 @@ impl AgentServicePort for Port {
 }
 
 impl Port {
+    fn result_content(&self) -> (Vec<u8>, [u8; 32]) {
+        if self.prompt_count == 1 {
+            (
+                b"The acceptance evidence is bounded and attributable.".to_vec(),
+                [
+                    0x56, 0xdc, 0xa1, 0x98, 0xaa, 0xaf, 0x18, 0x23, 0x9d, 0x3c, 0xd5, 0xb3, 0x6a,
+                    0x4a, 0xe9, 0xbd, 0x48, 0x6e, 0x7e, 0x65, 0x24, 0xae, 0xdf, 0x8c, 0xa9, 0x4a,
+                    0x17, 0x03, 0x3b, 0x29, 0x68, 0x70,
+                ],
+            )
+        } else {
+            (
+                b"The addressed room evidence was inspected without ambient authority.".to_vec(),
+                [
+                    0x84, 0xdc, 0x53, 0x24, 0x9d, 0xb0, 0xa3, 0xc4, 0xda, 0x79, 0x8f, 0xb2, 0x06,
+                    0x77, 0xe9, 0x41, 0x59, 0xfb, 0x66, 0x00, 0xd4, 0xcf, 0x1e, 0x10, 0xa6, 0x4e,
+                    0x49, 0x84, 0xf5, 0xd6, 0x31, 0x3a,
+                ],
+            )
+        }
+    }
+
+    fn result_events(&self) -> Vec<AgentEventRecordV1> {
+        let Some(turn) = self.last_turn else {
+            return Vec::new();
+        };
+        let (bytes, digest) = self.result_content();
+        let first = u64::from(self.prompt_count.saturating_sub(1)) * 2 + 1;
+        vec![
+            AgentEventRecordV1 {
+                cursor: first,
+                event: AgentEventV1::AssistantMessage {
+                    bytes: bytes.clone(),
+                },
+            },
+            AgentEventRecordV1 {
+                cursor: first + 1,
+                event: AgentEventV1::TurnFinished {
+                    turn,
+                    disposition: ExecutionDispositionV1::Completed,
+                    stop_reason: AgentTurnStopReasonV1::EndTurn,
+                    output_digest: Some(ContentDigestV1::new(digest)),
+                },
+            },
+        ]
+    }
+
     fn append(&self, action: &str) {
         let mut marker = OpenOptions::new()
             .create(true)
@@ -155,7 +240,7 @@ impl Port {
             },
             profile_document_digest: ContentDigestV1::new([3; 32]),
             active_turn: self.turn,
-            last_event_cursor: None,
+            last_event_cursor: (self.prompt_count > 0).then(|| u64::from(self.prompt_count) * 2),
             last_context: None,
             capabilities: AgentCapabilitiesV1 {
                 load_session: true,
@@ -184,6 +269,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             connected: false,
             session: None,
             turn: None,
+            last_turn: None,
+            last_request: None,
             revision: 1,
             prompt_count: 0,
             marker,
